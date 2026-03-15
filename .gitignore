@@ -1,0 +1,12 @@
+.idea
+.cursor
+
+*.env
+
+bin/
+*.exe
+*.test
+
+.DS_Store
+
+vendor/

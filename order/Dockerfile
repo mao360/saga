@@ -12,7 +12,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/order ./cmd/order
 FROM alpine:3.20
 WORKDIR /app
 RUN adduser -D appuser
-USER appuser
 COPY --from=builder /bin/order /app/order
+COPY --from=builder /src/internal/platform/config/config.yaml /app/config.yaml
+USER appuser
 EXPOSE 8080
 ENTRYPOINT ["/app/order"]

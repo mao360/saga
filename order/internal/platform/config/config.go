@@ -2,36 +2,102 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	HTTPPort string
+	HTTPPort string `yaml:"http_port"`
 
-	KafkaBrokers  []string
-	KafkaClientID string
-	KafkaGroupID  string
+	KafkaBrokers  []string `yaml:"kafka_brokers"`
+	KafkaClientID string   `yaml:"kafka_client_id"`
+	KafkaGroupID  string   `yaml:"kafka_group_id"`
 
-	TopicOrderEvents     string
-	TopicPaymentEvents   string
-	TopicInventoryEvents string
-	TopicCommands        string
-	TopicDLQ             string
+	TopicOrderEvents     string `yaml:"topic_order_events"`
+	TopicPaymentEvents   string `yaml:"topic_payment_events"`
+	TopicInventoryEvents string `yaml:"topic_inventory_events"`
+	TopicCommands        string `yaml:"topic_commands"`
+	TopicDLQ             string `yaml:"topic_dlq"`
+
+	DatabaseDSN string `yaml:"database_dsn"`
+
+	DatabaseConnectTimeout time.Duration `yaml:"database_connect_timeout"`
+	ShutdownTimeout        time.Duration `yaml:"shutdown_timeout"`
 }
 
-func Load() Config {
+func Load() (Config, error) {
+	cfg := defaultConfig()
+
+	path := strings.TrimSpace(getOr("APP_CONFIG_PATH", "internal/platform/config/config.yaml"))
+	if err := cfg.loadYAML(path); err != nil {
+		return Config{}, err
+	}
+	cfg.applyEnv()
+	cfg.normalize()
+
+	return cfg, nil
+}
+
+func defaultConfig() Config {
 	return Config{
-		HTTPPort: getOr("HTTP_PORT", "8080"),
+		HTTPPort: "8080",
 
-		KafkaBrokers:  splitCSV(getOr("KAFKA_BROKERS", "localhost:9092")),
-		KafkaClientID: getOr("KAFKA_CLIENT_ID", "order-service"),
-		KafkaGroupID:  getOr("KAFKA_GROUP_ID", "order-service-v1"),
+		KafkaBrokers:  []string{"localhost:9092"},
+		KafkaClientID: "order-service",
+		KafkaGroupID:  "order-service-v1",
 
-		TopicOrderEvents:     getOr("KAFKA_TOPIC_ORDER_EVENTS", "saga.order.events"),
-		TopicPaymentEvents:   getOr("KAFKA_TOPIC_PAYMENT_EVENTS", "saga.payment.events"),
-		TopicInventoryEvents: getOr("KAFKA_TOPIC_INVENTORY_EVENTS", "saga.inventory.events"),
-		TopicCommands:        getOr("KAFKA_TOPIC_COMMANDS", "saga.commands"),
-		TopicDLQ:             getOr("KAFKA_TOPIC_DLQ", "saga.dlq"),
+		TopicOrderEvents:     "saga.order.events",
+		TopicPaymentEvents:   "saga.payment.events",
+		TopicInventoryEvents: "saga.inventory.events",
+		TopicCommands:        "saga.commands",
+		TopicDLQ:             "saga.dlq",
+
+		DatabaseDSN: "",
+
+		DatabaseConnectTimeout: 10 * time.Second,
+		ShutdownTimeout:        5 * time.Second,
+	}
+}
+
+func (c *Config) loadYAML(path string) error {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return err
+	}
+	return yaml.Unmarshal(data, c)
+}
+
+func (c *Config) applyEnv() {
+	c.HTTPPort = getOr("HTTP_PORT", c.HTTPPort)
+
+	c.KafkaBrokers = splitCSV(getOr("KAFKA_BROKERS", strings.Join(c.KafkaBrokers, ",")))
+	c.KafkaClientID = getOr("KAFKA_CLIENT_ID", c.KafkaClientID)
+	c.KafkaGroupID = getOr("KAFKA_GROUP_ID", c.KafkaGroupID)
+
+	c.TopicOrderEvents = getOr("KAFKA_TOPIC_ORDER_EVENTS", c.TopicOrderEvents)
+	c.TopicPaymentEvents = getOr("KAFKA_TOPIC_PAYMENT_EVENTS", c.TopicPaymentEvents)
+	c.TopicInventoryEvents = getOr("KAFKA_TOPIC_INVENTORY_EVENTS", c.TopicInventoryEvents)
+	c.TopicCommands = getOr("KAFKA_TOPIC_COMMANDS", c.TopicCommands)
+	c.TopicDLQ = getOr("KAFKA_TOPIC_DLQ", c.TopicDLQ)
+
+	c.DatabaseDSN = getOr("DATABASE_DSN", c.DatabaseDSN)
+
+	c.DatabaseConnectTimeout = parseDurationOr(getOr("DATABASE_CONNECT_TIMEOUT", c.DatabaseConnectTimeout.String()), c.DatabaseConnectTimeout)
+	c.ShutdownTimeout = parseDurationOr(getOr("SHUTDOWN_TIMEOUT", c.ShutdownTimeout.String()), c.ShutdownTimeout)
+}
+
+func (c *Config) normalize() {
+	if len(c.KafkaBrokers) == 0 {
+		c.KafkaBrokers = []string{"localhost:9092"}
+	}
+	if c.DatabaseConnectTimeout <= 0 {
+		c.DatabaseConnectTimeout = 10 * time.Second
+	}
+	if c.ShutdownTimeout <= 0 {
+		c.ShutdownTimeout = 5 * time.Second
 	}
 }
 
@@ -56,4 +122,12 @@ func splitCSV(v string) []string {
 		return []string{"localhost:9092"}
 	}
 	return out
+}
+
+func parseDurationOr(v string, def time.Duration) time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(v))
+	if err != nil {
+		return def
+	}
+	return d
 }

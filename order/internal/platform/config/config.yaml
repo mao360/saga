@@ -1,0 +1,16 @@
+http_port: "8080"
+
+kafka_brokers:
+  - "localhost:9092"
+kafka_client_id: "order-service"
+kafka_group_id: "order-service-v1"
+
+topic_order_events: "saga.order.events"
+topic_payment_events: "saga.payment.events"
+topic_inventory_events: "saga.inventory.events"
+topic_commands: "saga.commands"
+topic_dlq: "saga.dlq"
+
+database_dsn: "postgres://order:order@localhost:5433/order?sslmode=disable"
+database_connect_timeout: 10s
+shutdown_timeout: 5s

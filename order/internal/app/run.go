@@ -1,0 +1,73 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"os/signal"
+	"syscall"
+
+	"github.com/mao360/saga/order/internal/repository"
+	"github.com/mao360/saga/order/internal/transport"
+	"github.com/mao360/saga/order/internal/usecase"
+	"github.com/twmb/franz-go/pkg/kgo"
+)
+
+func Run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	c, err := NewContainer()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	orderRepo := repository.NewOrderRepository(c.Database)
+	if err := orderRepo.Init(ctx); err != nil {
+		return err
+	}
+
+	orderUseCase := usecase.NewOrderUseCase(orderRepo, c.KafkaProducer, c.Cfg.TopicOrderEvents)
+	httpHandler := transport.NewHTTPHandler(orderUseCase, orderRepo)
+	mux := http.NewServeMux()
+	httpHandler.Register(mux)
+
+	httpSrv := &http.Server{
+		Addr:    ":" + c.Cfg.HTTPPort,
+		Handler: mux,
+	}
+
+	go func() {
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			c.Log.Error("http server failed", "err", err)
+			stop()
+		}
+	}()
+
+	go func() {
+		err := c.KafkaConsumer.Run(ctx, func(ctx context.Context, rec *kgo.Record) error {
+			var payload map[string]any
+			if err := json.Unmarshal(rec.Value, &payload); err != nil {
+				return err
+			}
+			c.Log.Info("event received",
+				"topic", rec.Topic,
+				"key", string(rec.Key),
+				"payload", payload,
+			)
+			return nil
+		})
+		if err != nil {
+			c.Log.Error("consumer stopped", "err", err)
+			stop()
+		}
+	}()
+
+	<-ctx.Done()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), c.Cfg.ShutdownTimeout)
+	defer cancel()
+
+	return httpSrv.Shutdown(shutdownCtx)
+}

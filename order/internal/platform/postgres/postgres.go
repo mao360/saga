@@ -18,6 +18,7 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	}
 
 	if err = pool.Ping(ctx); err != nil {
+		pool.Close()
 		return nil, err
 	}
 

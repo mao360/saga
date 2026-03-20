@@ -16,4 +16,5 @@ require (
 	github.com/twmb/franz-go/pkg/kmsg v1.12.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

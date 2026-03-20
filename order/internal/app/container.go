@@ -1,11 +1,14 @@
 package app
 
 import (
+	"context"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mao360/saga/order/internal/platform/config"
 	"github.com/mao360/saga/order/internal/platform/kafka"
 	"github.com/mao360/saga/order/internal/platform/logger"
+	"github.com/mao360/saga/order/internal/platform/postgres"
 )
 
 type Container struct {
@@ -14,14 +17,27 @@ type Container struct {
 
 	KafkaProducer *kafka.Producer
 	KafkaConsumer *kafka.Consumer
+
+	Database *pgxpool.Pool
 }
 
 func NewContainer() (*Container, error) {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
 	log := logger.New()
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.DatabaseConnectTimeout)
+	defer cancel()
+
+	pool, err := postgres.NewPool(ctx, cfg.DatabaseDSN)
+	if err != nil {
+		return nil, err
+	}
 
 	producer, err := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaClientID)
 	if err != nil {
+		pool.Close()
 		return nil, err
 	}
 
@@ -36,6 +52,7 @@ func NewContainer() (*Container, error) {
 	)
 	if err != nil {
 		producer.Close()
+		pool.Close()
 		return nil, err
 	}
 
@@ -44,6 +61,7 @@ func NewContainer() (*Container, error) {
 		Log:           log,
 		KafkaProducer: producer,
 		KafkaConsumer: consumer,
+		Database:      pool,
 	}, nil
 }
 
@@ -53,5 +71,9 @@ func (c *Container) Close() {
 	}
 	if c.KafkaProducer != nil {
 		c.KafkaProducer.Close()
+	}
+
+	if c.Database != nil {
+		c.Database.Close()
 	}
 }

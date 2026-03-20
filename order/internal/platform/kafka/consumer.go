@@ -83,7 +83,13 @@ func (c *Consumer) Run(ctx context.Context, handler Handler) error {
 
 				// Коммитим даже ошибочную запись, чтобы не зациклиться.
 				// Для прод-а часто делают иначе (retry + parking).
-				_ = c.client.CommitRecords(ctx, rec)
+				if commitErr := c.client.CommitRecords(ctx, rec); commitErr != nil {
+					c.log.Error("commit failed after handler error",
+						"err", commitErr,
+						"topic", rec.Topic,
+						"offset", rec.Offset,
+					)
+				}
 				continue
 			}
 

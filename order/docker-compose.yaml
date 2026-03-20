@@ -1,21 +1,21 @@
-version: "3.9"
-
 services:
   postgres-order:
     image: postgres:16
     container_name: postgres-order
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: order
-      POSTGRES_PASSWORD: order
-      POSTGRES_DB: order
+      POSTGRES_USER: ${POSTGRES_USER:-order}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-order}
+      POSTGRES_DB: ${POSTGRES_DB:-order}
     ports:
-      - "5433:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_order_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U order -d order"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
-      timeout: 3s
+      timeout: ${POSTGRES_HEALTHCHECK_TIMEOUT:-3s}
       retries: 20
 
   kafka:
@@ -23,14 +23,14 @@ services:
     container_name: kafka
     hostname: kafka
     ports:
-      - "9092:9092"    # internal (for other containers)
-      - "29092:29092"  # external (for host machine)
+      - "${KAFKA_INTERNAL_PORT:-9092}:${KAFKA_INTERNAL_PORT:-9092}"
+      - "${KAFKA_EXTERNAL_PORT:-29092}:${KAFKA_EXTERNAL_PORT:-29092}"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
 
-      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:29092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENERS: INTERNAL://:${KAFKA_INTERNAL_PORT:-9092},EXTERNAL://:${KAFKA_EXTERNAL_PORT:-29092},CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:${KAFKA_INTERNAL_PORT:-9092},EXTERNAL://localhost:${KAFKA_EXTERNAL_PORT:-29092}
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
 
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
@@ -46,9 +46,9 @@ services:
       # single-node dev safety
       KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:${KAFKA_INTERNAL_PORT:-9092} --list > /dev/null 2>&1"]
       interval: 10s
-      timeout: 5s
+      timeout: ${KAFKA_HEALTHCHECK_TIMEOUT:-5s}
       retries: 20
 
   kafka-init:
@@ -60,11 +60,11 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command: >
       "
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic saga.order.events --partitions 3 --replication-factor 1 &&
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic saga.payment.events --partitions 3 --replication-factor 1 &&
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic saga.inventory.events --partitions 3 --replication-factor 1 &&
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic saga.commands --partitions 3 --replication-factor 1 &&
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic saga.dlq --partitions 3 --replication-factor 1
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:${KAFKA_INTERNAL_PORT:-9092} --create --if-not-exists --topic ${KAFKA_TOPIC_ORDER_EVENTS:-saga.order.events} --partitions 3 --replication-factor 1 &&
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:${KAFKA_INTERNAL_PORT:-9092} --create --if-not-exists --topic ${KAFKA_TOPIC_PAYMENT_EVENTS:-saga.payment.events} --partitions 3 --replication-factor 1 &&
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:${KAFKA_INTERNAL_PORT:-9092} --create --if-not-exists --topic ${KAFKA_TOPIC_INVENTORY_EVENTS:-saga.inventory.events} --partitions 3 --replication-factor 1 &&
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:${KAFKA_INTERNAL_PORT:-9092} --create --if-not-exists --topic ${KAFKA_TOPIC_COMMANDS:-saga.commands} --partitions 3 --replication-factor 1 &&
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:${KAFKA_INTERNAL_PORT:-9092} --create --if-not-exists --topic ${KAFKA_TOPIC_DLQ:-saga.dlq} --partitions 3 --replication-factor 1
       "
 
   kafka-ui:
@@ -74,10 +74,10 @@ services:
       kafka:
         condition: service_healthy
     ports:
-      - "8081:8080"
+      - "${KAFKA_UI_PORT:-8081}:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local-kraft
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:${KAFKA_INTERNAL_PORT:-9092}
 
   order:
     build:
@@ -91,23 +91,27 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
+    env_file:
+      - .env
     ports:
-      - "8080:8080"
+      - "${HTTP_PORT:-8080}:${HTTP_PORT:-8080}"
     environment:
-      HTTP_PORT: "8080"
+      APP_CONFIG_PATH: /app/config.yaml
+      HTTP_PORT: ${HTTP_PORT:-8080}
 
-      POSTGRES_DSN: "postgres://order:order@postgres-order:5432/order?sslmode=disable"
+      DATABASE_DSN: ${DATABASE_DSN:-postgres://order:order@postgres-order:5432/order?sslmode=disable}
 
-      # inside docker network:
-      KAFKA_BROKERS: "kafka:9092"
-      KAFKA_CLIENT_ID: "order-service"
-      KAFKA_GROUP_ID: "order-service-v1"
+      KAFKA_BROKERS: kafka:${KAFKA_INTERNAL_PORT:-9092}
+      KAFKA_CLIENT_ID: ${KAFKA_CLIENT_ID:-order-service}
+      KAFKA_GROUP_ID: ${KAFKA_GROUP_ID:-order-service-v1}
 
-      KAFKA_TOPIC_ORDER_EVENTS: "saga.order.events"
-      KAFKA_TOPIC_PAYMENT_EVENTS: "saga.payment.events"
-      KAFKA_TOPIC_INVENTORY_EVENTS: "saga.inventory.events"
-      KAFKA_TOPIC_COMMANDS: "saga.commands"
-      KAFKA_TOPIC_DLQ: "saga.dlq"
+      KAFKA_TOPIC_ORDER_EVENTS: ${KAFKA_TOPIC_ORDER_EVENTS:-saga.order.events}
+      KAFKA_TOPIC_PAYMENT_EVENTS: ${KAFKA_TOPIC_PAYMENT_EVENTS:-saga.payment.events}
+      KAFKA_TOPIC_INVENTORY_EVENTS: ${KAFKA_TOPIC_INVENTORY_EVENTS:-saga.inventory.events}
+      KAFKA_TOPIC_COMMANDS: ${KAFKA_TOPIC_COMMANDS:-saga.commands}
+      KAFKA_TOPIC_DLQ: ${KAFKA_TOPIC_DLQ:-saga.dlq}
+      DATABASE_CONNECT_TIMEOUT: ${DATABASE_CONNECT_TIMEOUT:-10s}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-5s}
 
 volumes:
   postgres_order_data:

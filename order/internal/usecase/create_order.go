@@ -38,13 +38,6 @@ func NewOrderUseCase(repo OrderRepository, publisher EventPublisher, topic strin
 	}
 }
 
-func (u *OrderUseCase) CreateTestOrder(ctx context.Context) (domain.Order, error) {
-	return u.CreateOrder(ctx, CreateOrderInput{
-		Customer: "test-user",
-		Amount:   100,
-	})
-}
-
 func (u *OrderUseCase) CreateOrder(ctx context.Context, input CreateOrderInput) (domain.Order, error) {
 	now := time.Now().UTC()
 	order := domain.Order{

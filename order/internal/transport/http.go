@@ -15,7 +15,6 @@ import (
 )
 
 type OrderCreator interface {
-	CreateTestOrder(ctx context.Context) (domain.Order, error)
 	CreateOrder(ctx context.Context, input usecase.CreateOrderInput) (domain.Order, error)
 	GetOrderByID(ctx context.Context, id string) (domain.Order, error)
 }
@@ -43,7 +42,6 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/readyz", h.readyz)
 	mux.HandleFunc("/orders", h.orders)
 	mux.HandleFunc("/orders/", h.orderByID)
-	mux.HandleFunc("/orders/test", h.createTestOrder)
 }
 
 func (h *HTTPHandler) health(w http.ResponseWriter, _ *http.Request) {
@@ -70,35 +68,6 @@ func (h *HTTPHandler) readyz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ready"))
 	h.log.Info("http request completed", "method", r.Method, "path", r.URL.Path, "status", http.StatusOK, "duration_ms", time.Since(start).Milliseconds())
-}
-
-func (h *HTTPHandler) createTestOrder(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	h.log.Info("http request started", "method", r.Method, "path", r.URL.Path)
-	if r.Method != http.MethodPost {
-		h.log.Warn("method not allowed", "method", r.Method, "path", r.URL.Path)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		h.log.Info("http request completed", "method", r.Method, "path", r.URL.Path, "status", http.StatusMethodNotAllowed, "duration_ms", time.Since(start).Milliseconds())
-		return
-	}
-
-	order, err := h.creator.CreateTestOrder(r.Context())
-	if err != nil {
-		h.log.Error("create test order failed", "err", err)
-		if errors.Is(err, domain.ErrInvalidOrder) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			h.log.Info("http request completed", "method", r.Method, "path", r.URL.Path, "status", http.StatusBadRequest, "duration_ms", time.Since(start).Milliseconds())
-			return
-		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		h.log.Info("http request completed", "method", r.Method, "path", r.URL.Path, "status", http.StatusInternalServerError, "duration_ms", time.Since(start).Milliseconds())
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(order)
-	h.log.Info("http request completed", "method", r.Method, "path", r.URL.Path, "status", http.StatusCreated, "duration_ms", time.Since(start).Milliseconds())
 }
 
 func (h *HTTPHandler) orders(w http.ResponseWriter, r *http.Request) {

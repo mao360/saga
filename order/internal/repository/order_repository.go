@@ -15,18 +15,6 @@ func NewOrderRepository(db *pgxpool.Pool) *OrderRepository {
 	return &OrderRepository{db: db}
 }
 
-func (r *OrderRepository) Init(ctx context.Context) error {
-	const q = `
-	create table if not exists orders (
-		id text primary key,
-		customer text not null,
-		amount bigint not null,
-		created_at timestamptz not null
-	)`
-	_, err := r.db.Exec(ctx, q)
-	return err
-}
-
 func (r *OrderRepository) Save(ctx context.Context, order domain.Order) error {
 	const q = `
 	insert into orders (id, customer, amount, created_at)

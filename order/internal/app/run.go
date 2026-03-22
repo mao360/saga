@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/mao360/saga/order/internal/platform/postgres"
 	"github.com/mao360/saga/order/internal/repository"
 	"github.com/mao360/saga/order/internal/transport"
 	"github.com/mao360/saga/order/internal/usecase"
@@ -23,10 +24,11 @@ func Run() error {
 	}
 	defer c.Close()
 
-	orderRepo := repository.NewOrderRepository(c.Database)
-	if err := orderRepo.Init(ctx); err != nil {
+	if err := postgres.RunMigrations(c.Cfg.DatabaseDSN, "migrations"); err != nil {
 		return err
 	}
+
+	orderRepo := repository.NewOrderRepository(c.Database)
 
 	orderUseCase := usecase.NewOrderUseCase(orderRepo, c.KafkaProducer, c.Cfg.TopicOrderEvents)
 	httpHandler := transport.NewHTTPHandler(orderUseCase, orderRepo)

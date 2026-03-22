@@ -14,6 +14,7 @@ WORKDIR /app
 RUN adduser -D appuser
 COPY --from=builder /bin/order /app/order
 COPY --from=builder /src/internal/platform/config/config.yaml /app/config.yaml
+COPY --from=builder /src/migrations /app/migrations
 USER appuser
 EXPOSE 8080
 ENTRYPOINT ["/app/order"]

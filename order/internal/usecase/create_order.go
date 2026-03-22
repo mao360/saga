@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mao360/saga/order/internal/domain"
@@ -11,6 +12,7 @@ import (
 
 type OrderRepository interface {
 	Save(ctx context.Context, order domain.Order) error
+	GetByID(ctx context.Context, id string) (domain.Order, error)
 }
 
 type EventPublisher interface {
@@ -23,6 +25,11 @@ type OrderUseCase struct {
 	topic     string
 }
 
+type CreateOrderInput struct {
+	Customer string `json:"customer"`
+	Amount   int64  `json:"amount"`
+}
+
 func NewOrderUseCase(repo OrderRepository, publisher EventPublisher, topic string) *OrderUseCase {
 	return &OrderUseCase{
 		repo:      repo,
@@ -32,11 +39,18 @@ func NewOrderUseCase(repo OrderRepository, publisher EventPublisher, topic strin
 }
 
 func (u *OrderUseCase) CreateTestOrder(ctx context.Context) (domain.Order, error) {
+	return u.CreateOrder(ctx, CreateOrderInput{
+		Customer: "test-user",
+		Amount:   100,
+	})
+}
+
+func (u *OrderUseCase) CreateOrder(ctx context.Context, input CreateOrderInput) (domain.Order, error) {
 	now := time.Now().UTC()
 	order := domain.Order{
 		ID:        strconv.FormatInt(now.UnixNano(), 10),
-		Customer:  "test-user",
-		Amount:    100,
+		Customer:  strings.TrimSpace(input.Customer),
+		Amount:    input.Amount,
 		CreatedAt: now,
 	}
 
@@ -58,4 +72,12 @@ func (u *OrderUseCase) CreateTestOrder(ctx context.Context) (domain.Order, error
 	}
 
 	return order, nil
+}
+
+func (u *OrderUseCase) GetOrderByID(ctx context.Context, id string) (domain.Order, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return domain.Order{}, domain.ErrInvalidOrder
+	}
+	return u.repo.GetByID(ctx, id)
 }

@@ -2,6 +2,7 @@
 .cursor
 
 *.env
+.env.infra
 
 bin/
 *.exe

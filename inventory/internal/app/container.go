@@ -5,10 +5,10 @@ import (
 	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/mao360/saga/order/internal/platform/config"
-	"github.com/mao360/saga/order/internal/platform/kafka"
-	"github.com/mao360/saga/order/internal/platform/logger"
-	"github.com/mao360/saga/order/internal/platform/postgres"
+	"github.com/mao360/saga/inventory/internal/platform/config"
+	"github.com/mao360/saga/inventory/internal/platform/kafka"
+	"github.com/mao360/saga/inventory/internal/platform/logger"
+	"github.com/mao360/saga/inventory/internal/platform/postgres"
 )
 
 type Container struct {
@@ -26,6 +26,7 @@ func NewContainer() (*Container, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	log := logger.New()
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.DatabaseConnectTimeout)
 	defer cancel()
@@ -45,7 +46,7 @@ func NewContainer() (*Container, error) {
 		cfg.KafkaBrokers,
 		cfg.KafkaClientID,
 		cfg.KafkaGroupID,
-		[]string{cfg.TopicPaymentEvents, cfg.TopicInventoryEvents},
+		[]string{cfg.TopicCommands},
 		log,
 		producer,
 		cfg.TopicDLQ,
@@ -57,7 +58,7 @@ func NewContainer() (*Container, error) {
 	}
 
 	return &Container{
-		Cfg:           cfg,
+		Cfg:           *cfg,
 		Log:           log,
 		KafkaProducer: producer,
 		KafkaConsumer: consumer,
@@ -65,15 +66,15 @@ func NewContainer() (*Container, error) {
 	}, nil
 }
 
-func (c *Container) Close() {
+func (c *Container) Close() error {
 	if c.KafkaConsumer != nil {
-		c.KafkaConsumer.Close()
+		_ = c.KafkaConsumer.Close()
 	}
 	if c.KafkaProducer != nil {
 		c.KafkaProducer.Close()
 	}
-
 	if c.Database != nil {
 		c.Database.Close()
 	}
+	return nil
 }

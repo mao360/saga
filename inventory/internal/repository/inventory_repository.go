@@ -14,6 +14,13 @@ const (
 	ReserveStatusReserved  = "reserved"
 	ReserveStatusRejected  = "rejected"
 	ReserveStatusProcessed = "processed"
+
+	ReleaseStatusReleased  = "released"
+	ReleaseStatusRejected  = "rejected"
+	ReleaseStatusProcessed = "processed"
+
+	StockStatusUpdated   = "updated"
+	StockStatusProcessed = "processed"
 )
 
 type InventoryRepository struct {
@@ -117,4 +124,133 @@ func (r *InventoryRepository) markProcessedTx(ctx context.Context, tx pgx.Tx, co
 		values ($1, $2)
 	`, commandID, time.Now().UTC())
 	return err
+}
+
+func (r *InventoryRepository) Release(ctx context.Context, cmd domain.Command) (string, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+
+	var alreadyProcessed bool
+	if err := tx.QueryRow(ctx,
+		"select exists(select 1 from processed_commands where command_id = $1)",
+		cmd.CommandID,
+	).Scan(&alreadyProcessed); err != nil {
+		return "", err
+	}
+	if alreadyProcessed {
+		if err := tx.Commit(ctx); err != nil {
+			return "", err
+		}
+		return ReleaseStatusProcessed, nil
+	}
+
+	var status string
+	err = tx.QueryRow(ctx,
+		"select status from inventory_reservation where saga_id = $1 and sku = $2 for update",
+		cmd.SagaID, cmd.SKU,
+	).Scan(&status)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
+				return "", err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return "", err
+			}
+			return ReleaseStatusRejected, nil
+		}
+		return "", err
+	}
+
+	if status != "reserved" {
+		if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
+			return "", err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return "", err
+		}
+		return ReleaseStatusProcessed, nil
+	}
+
+	now := time.Now().UTC()
+	tag, err := tx.Exec(ctx, `
+		update inventory_reservation
+		set status = 'released', updated_at = $1
+		where saga_id = $2 and sku = $3 and status = 'reserved'
+	`, now, cmd.SagaID, cmd.SKU)
+	if err != nil {
+		return "", err
+	}
+	if tag.RowsAffected() == 0 {
+		if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
+			return "", err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return "", err
+		}
+		return ReleaseStatusProcessed, nil
+	}
+
+	_, err = tx.Exec(ctx, `
+		update inventory_stock
+		set available_qty = least(total_qty, available_qty + $1), updated_at = $2
+		where sku = $3
+	`, cmd.Qty, now, cmd.SKU)
+	if err != nil {
+		return "", err
+	}
+
+	if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return ReleaseStatusReleased, nil
+}
+
+func (r *InventoryRepository) SetStock(ctx context.Context, cmd domain.Command) (string, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+
+	var alreadyProcessed bool
+	if err := tx.QueryRow(ctx,
+		"select exists(select 1 from processed_commands where command_id = $1)",
+		cmd.CommandID,
+	).Scan(&alreadyProcessed); err != nil {
+		return "", err
+	}
+	if alreadyProcessed {
+		if err := tx.Commit(ctx); err != nil {
+			return "", err
+		}
+		return StockStatusProcessed, nil
+	}
+
+	now := time.Now().UTC()
+	_, err = tx.Exec(ctx, `
+		insert into inventory_stock (sku, total_qty, available_qty, updated_at)
+		values ($1, $2, $2, $3)
+		on conflict (sku) do update
+		set total_qty = excluded.total_qty,
+		    available_qty = excluded.available_qty,
+		    updated_at = excluded.updated_at
+	`, cmd.SKU, cmd.Qty, now)
+	if err != nil {
+		return "", err
+	}
+
+	if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return StockStatusUpdated, nil
 }

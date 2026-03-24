@@ -45,11 +45,13 @@ func Run() error {
 		}
 	}()
 
-	// Example accepted command payload in saga.commands:
-	// {"command_id":"cmd-1","type":"reserve_inventory","saga_id":"saga-1","order_id":"order-1","sku":"sku-1","qty":1}
+	// Example accepted command payloads in saga.commands:
+	// reserve: {"command_id":"cmd-1","type":"reserve_inventory","saga_id":"saga-1","order_id":"order-1","sku":"sku-1","qty":1}
+	// release: {"command_id":"cmd-2","type":"release_inventory","saga_id":"saga-1","order_id":"order-1","sku":"sku-1","qty":1}
+	// set stock: {"command_id":"cmd-3","type":"set_stock","sku":"sku-1","qty":10}
 	sample, _ := json.Marshal(map[string]any{
 		"topic": c.Cfg.TopicCommands,
-		"type":  "reserve_inventory",
+		"types": []string{"reserve_inventory", "release_inventory", "set_stock"},
 	})
 	c.Log.Info("inventory command contract", "example", string(sample))
 

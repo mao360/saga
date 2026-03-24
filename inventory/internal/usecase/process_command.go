@@ -12,6 +12,8 @@ import (
 
 type InventoryRepository interface {
 	Reserve(ctx context.Context, cmd domain.Command) (string, error)
+	Release(ctx context.Context, cmd domain.Command) (string, error)
+	SetStock(ctx context.Context, cmd domain.Command) (string, error)
 }
 
 type EventPublisher interface {
@@ -36,36 +38,84 @@ func (u *InventoryUseCase) ProcessCommand(ctx context.Context, cmd domain.Comman
 	if strings.TrimSpace(cmd.CommandID) == "" || cmd.Qty <= 0 || strings.TrimSpace(cmd.SKU) == "" {
 		return domain.ErrInvalidCommand
 	}
-	if cmd.Type != "reserve_inventory" {
+	switch cmd.Type {
+	case "reserve_inventory":
+		status, err := u.repo.Reserve(ctx, cmd)
+		if err != nil {
+			return err
+		}
+		if status == repository.ReserveStatusProcessed {
+			return nil
+		}
+		event := domain.Event{
+			CommandID:  cmd.CommandID,
+			SagaID:     cmd.SagaID,
+			OrderID:    cmd.OrderID,
+			SKU:        cmd.SKU,
+			Qty:        cmd.Qty,
+			OccurredAt: time.Now().UTC(),
+		}
+		if status == repository.ReserveStatusReserved {
+			event.Type = "inventory_reserved"
+		} else {
+			event.Type = "inventory_rejected"
+			event.Reason = "out_of_stock"
+		}
+		return u.publishEvent(ctx, event)
+	case "release_inventory":
+		status, err := u.repo.Release(ctx, cmd)
+		if err != nil {
+			return err
+		}
+		if status == repository.ReleaseStatusProcessed {
+			return nil
+		}
+		event := domain.Event{
+			CommandID:  cmd.CommandID,
+			SagaID:     cmd.SagaID,
+			OrderID:    cmd.OrderID,
+			SKU:        cmd.SKU,
+			Qty:        cmd.Qty,
+			OccurredAt: time.Now().UTC(),
+		}
+		if status == repository.ReleaseStatusReleased {
+			event.Type = "inventory_released"
+		} else {
+			event.Type = "inventory_release_rejected"
+			event.Reason = "reservation_not_found"
+		}
+		return u.publishEvent(ctx, event)
+	case "set_stock":
+		status, err := u.repo.SetStock(ctx, cmd)
+		if err != nil {
+			return err
+		}
+		if status == repository.StockStatusProcessed {
+			return nil
+		}
+		event := domain.Event{
+			Type:       "inventory_stock_set",
+			CommandID:  cmd.CommandID,
+			SagaID:     cmd.SagaID,
+			OrderID:    cmd.OrderID,
+			SKU:        cmd.SKU,
+			Qty:        cmd.Qty,
+			OccurredAt: time.Now().UTC(),
+		}
+		return u.publishEvent(ctx, event)
+	default:
 		return nil
 	}
+}
 
-	status, err := u.repo.Reserve(ctx, cmd)
-	if err != nil {
-		return err
-	}
-	if status == repository.ReserveStatusProcessed {
-		return nil
-	}
-
-	event := domain.Event{
-		CommandID:  cmd.CommandID,
-		SagaID:     cmd.SagaID,
-		OrderID:    cmd.OrderID,
-		SKU:        cmd.SKU,
-		Qty:        cmd.Qty,
-		OccurredAt: time.Now().UTC(),
-	}
-	if status == repository.ReserveStatusReserved {
-		event.Type = "inventory_reserved"
-	} else {
-		event.Type = "inventory_rejected"
-		event.Reason = "out_of_stock"
-	}
-
+func (u *InventoryUseCase) publishEvent(ctx context.Context, event domain.Event) error {
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
-	return u.publisher.Publish(ctx, u.topic, []byte(cmd.OrderID), payload)
+	key := event.OrderID
+	if strings.TrimSpace(key) == "" {
+		key = event.SKU
+	}
+	return u.publisher.Publish(ctx, u.topic, []byte(key), payload)
 }

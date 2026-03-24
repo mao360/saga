@@ -1,0 +1,60 @@
+services:
+  postgres-payment:
+    image: postgres:16
+    container_name: postgres-payment
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-payment}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-payment}
+      POSTGRES_DB: ${POSTGRES_DB:-payment}
+    ports:
+      - "${POSTGRES_PORT:-5435}:5432"
+    volumes:
+      - postgres_payment_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: ${POSTGRES_HEALTHCHECK_TIMEOUT:-3s}
+      retries: 20
+    networks:
+      - saga-net
+
+  payment:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: payment
+    depends_on:
+      postgres-payment:
+        condition: service_healthy
+    env_file:
+      - .env
+    ports:
+      - "${HTTP_PORT:-8083}:${HTTP_PORT:-8083}"
+    environment:
+      APP_CONFIG_PATH: /app/config.yaml
+      HTTP_PORT: ${HTTP_PORT:-8083}
+
+      DATABASE_DSN: ${DATABASE_DSN:-postgres://payment:payment@postgres-payment:5432/payment?sslmode=disable}
+
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+      KAFKA_CLIENT_ID: ${KAFKA_CLIENT_ID:-payment-service}
+      KAFKA_GROUP_ID: ${KAFKA_GROUP_ID:-payment-service-v1}
+
+      KAFKA_TOPIC_ORDER_EVENTS: ${KAFKA_TOPIC_ORDER_EVENTS:-saga.order.events}
+      KAFKA_TOPIC_PAYMENT_EVENTS: ${KAFKA_TOPIC_PAYMENT_EVENTS:-saga.payment.events}
+      KAFKA_TOPIC_INVENTORY_EVENTS: ${KAFKA_TOPIC_INVENTORY_EVENTS:-saga.inventory.events}
+      KAFKA_TOPIC_COMMANDS: ${KAFKA_TOPIC_COMMANDS:-saga.commands}
+      KAFKA_TOPIC_DLQ: ${KAFKA_TOPIC_DLQ:-saga.dlq}
+      DATABASE_CONNECT_TIMEOUT: ${DATABASE_CONNECT_TIMEOUT:-10s}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-5s}
+    networks:
+      - saga-net
+
+volumes:
+  postgres_payment_data:
+
+networks:
+  saga-net:
+    external: true

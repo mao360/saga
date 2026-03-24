@@ -1,0 +1,7 @@
+with-expecter: true
+issue-845-fix: true
+all: true
+recursive: false
+dir: internal/usecase
+output: internal/usecase/mocks
+outpkg: mocks

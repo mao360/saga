@@ -36,7 +36,7 @@ func TestOrderUseCase_CreateOrder(t *testing.T) {
 			publisher := mocks.NewEventPublisher(t)
 			tt.setup(repo, publisher)
 
-			u := NewOrderUseCase(repo, publisher, "test-topic")
+			u := NewOrderUseCase(repo, publisher, "test-topic", "test-commands")
 
 			_, err := u.CreateOrder(context.Background(), tt.input)
 			if tt.wantErr == nil {
@@ -89,7 +89,7 @@ func TestOrderUseCase_GetOrderByID(t *testing.T) {
 			publisher := mocks.NewEventPublisher(t)
 			tt.setup(repo)
 
-			u := NewOrderUseCase(repo, publisher, "test-topic")
+			u := NewOrderUseCase(repo, publisher, "test-topic", "test-commands")
 			got, err := u.GetOrderByID(context.Background(), tt.id)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("GetOrderByID() error = %v, wantErr %v", err, tt.wantErr)

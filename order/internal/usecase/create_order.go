@@ -20,21 +20,37 @@ type EventPublisher interface {
 }
 
 type OrderUseCase struct {
-	repo      OrderRepository
-	publisher EventPublisher
-	topic     string
+	repo          OrderRepository
+	publisher     EventPublisher
+	orderTopic    string
+	commandsTopic string
 }
 
 type CreateOrderInput struct {
-	Customer string `json:"customer"`
-	Amount   int64  `json:"amount"`
+	Customer  string `json:"customer"`
+	Amount    int64  `json:"amount"`
+	SKU       string `json:"sku"`
+	Qty       int64  `json:"qty"`
+	AccountID string `json:"account_id"`
 }
 
-func NewOrderUseCase(repo OrderRepository, publisher EventPublisher, topic string) *OrderUseCase {
+type sagaCommand struct {
+	CommandID string `json:"command_id"`
+	Type      string `json:"type"`
+	SagaID    string `json:"saga_id"`
+	OrderID   string `json:"order_id"`
+	SKU       string `json:"sku,omitempty"`
+	Qty       int64  `json:"qty,omitempty"`
+	AccountID string `json:"account_id,omitempty"`
+	Amount    int64  `json:"amount,omitempty"`
+}
+
+func NewOrderUseCase(repo OrderRepository, publisher EventPublisher, orderTopic, commandsTopic string) *OrderUseCase {
 	return &OrderUseCase{
-		repo:      repo,
-		publisher: publisher,
-		topic:     topic,
+		repo:          repo,
+		publisher:     publisher,
+		orderTopic:    orderTopic,
+		commandsTopic: commandsTopic,
 	}
 }
 
@@ -44,10 +60,13 @@ func (u *OrderUseCase) CreateOrder(ctx context.Context, input CreateOrderInput) 
 		ID:        strconv.FormatInt(now.UnixNano(), 10),
 		Customer:  strings.TrimSpace(input.Customer),
 		Amount:    input.Amount,
+		SKU:       strings.TrimSpace(input.SKU),
+		Qty:       input.Qty,
+		AccountID: strings.TrimSpace(input.AccountID),
 		CreatedAt: now,
 	}
 
-	if order.Amount <= 0 || order.Customer == "" {
+	if order.Amount <= 0 || order.Customer == "" || order.SKU == "" || order.Qty <= 0 || order.AccountID == "" {
 		return domain.Order{}, domain.ErrInvalidOrder
 	}
 
@@ -60,7 +79,32 @@ func (u *OrderUseCase) CreateOrder(ctx context.Context, input CreateOrderInput) 
 		return domain.Order{}, err
 	}
 
-	if err := u.publisher.Publish(ctx, u.topic, []byte(order.ID), payload); err != nil {
+	if err := u.publisher.Publish(ctx, u.orderTopic, []byte(order.ID), payload); err != nil {
+		return domain.Order{}, err
+	}
+
+	sagaID := "saga-" + order.ID
+	reserve := sagaCommand{
+		CommandID: "cmd-reserve-" + order.ID,
+		Type:      "reserve_inventory",
+		SagaID:    sagaID,
+		OrderID:   order.ID,
+		SKU:       order.SKU,
+		Qty:       order.Qty,
+	}
+	if err := u.publishCommand(ctx, order.ID, reserve); err != nil {
+		return domain.Order{}, err
+	}
+
+	charge := sagaCommand{
+		CommandID: "cmd-charge-" + order.ID,
+		Type:      "charge_payment",
+		SagaID:    sagaID,
+		OrderID:   order.ID,
+		AccountID: order.AccountID,
+		Amount:    order.Amount,
+	}
+	if err := u.publishCommand(ctx, order.ID, charge); err != nil {
 		return domain.Order{}, err
 	}
 
@@ -73,4 +117,12 @@ func (u *OrderUseCase) GetOrderByID(ctx context.Context, id string) (domain.Orde
 		return domain.Order{}, domain.ErrInvalidOrder
 	}
 	return u.repo.GetByID(ctx, id)
+}
+
+func (u *OrderUseCase) publishCommand(ctx context.Context, key string, cmd sagaCommand) error {
+	payload, err := json.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+	return u.publisher.Publish(ctx, u.commandsTopic, []byte(key), payload)
 }

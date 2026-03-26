@@ -6,8 +6,10 @@ up:
 	# Сборка и запуск сервисов
 	docker compose -f order/docker-compose.yaml up -d --build
 	docker compose -f inventory/docker-compose.yaml up -d --build
+	docker compose -f payment/docker-compose.yaml up -d --build
 
 down:
+	docker compose -f payment/docker-compose.yaml down
 	docker compose -f inventory/docker-compose.yaml down
 	docker compose -f order/docker-compose.yaml down
 	docker compose -f docker-compose.infra.yaml down

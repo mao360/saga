@@ -34,7 +34,7 @@ func Run() error {
 
 	orderRepo := repository.NewOrderRepository(c.Database)
 
-	orderUseCase := usecase.NewOrderUseCase(orderRepo, c.KafkaProducer, c.Cfg.TopicOrderEvents)
+	orderUseCase := usecase.NewOrderUseCase(orderRepo, c.KafkaProducer, c.Cfg.TopicOrderEvents, c.Cfg.TopicCommands)
 	httpHandler := transport.NewHTTPHandler(orderUseCase, orderRepo, c.Log)
 	mux := http.NewServeMux()
 	httpHandler.Register(mux)

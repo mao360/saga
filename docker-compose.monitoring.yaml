@@ -1,0 +1,54 @@
+services:
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:latest}
+    container_name: ${PROMETHEUS_CONTAINER_NAME:-prometheus}
+    restart: unless-stopped
+    volumes:
+      - ${PROMETHEUS_CONFIG_PATH:-./monitoring/prometheus.yml}:/etc/prometheus/prometheus.yml
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - saga-net
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana:latest}
+    container_name: ${GRAFANA_CONTAINER_NAME:-grafana}
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}
+    depends_on:
+      - prometheus
+    networks:
+      - saga-net
+
+  cadvisor:
+    image: ${CADVISOR_IMAGE:-gcr.io/cadvisor/cadvisor:latest}
+    container_name: ${CADVISOR_CONTAINER_NAME:-cadvisor}
+    restart: unless-stopped
+    ports:
+      - "${CADVISOR_PORT:-8088}:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - saga-net
+
+  kafka-exporter:
+    image: ${KAFKA_EXPORTER_IMAGE:-danielqsj/kafka-exporter:latest}
+    container_name: ${KAFKA_EXPORTER_CONTAINER_NAME:-kafka-exporter}
+    restart: unless-stopped
+    command: [ "--kafka.server=${KAFKA_EXPORTER_SERVER:-kafka:9092}" ]
+    ports:
+      - "${KAFKA_EXPORTER_PORT:-9308}:9308"
+    networks:
+      - saga-net
+
+networks:
+  saga-net:
+    external: true
+    name: ${SAGA_NETWORK:-saga-net}

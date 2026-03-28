@@ -1,4 +1,7 @@
-.PHONY: up down monitoring-up monitoring-down load-prefill load-smoke load-ramp load-smoke-with-prefill load-ramp-with-prefill mocks
+K6 ?= k6
+KCAT ?= /opt/homebrew/bin/kcat
+
+.PHONY: up down monitoring-up monitoring-down load-prefill load-smoke load-ramp load-soak load-arrival load-smoke-with-prefill load-ramp-with-prefill load-soak-with-prefill load-arrival-with-prefill mocks
 
 up:
 	# Запуск инфраструктуры
@@ -24,17 +27,27 @@ monitoring-down:
 	docker compose --env-file .env.monitoring -f docker-compose.monitoring.yaml down
 
 load-prefill:
-	./loadtest/k6/scripts/prefill-happy-path.sh
+	KCAT=$(KCAT) ./loadtest/k6/scripts/prefill-happy-path.sh
 
 load-smoke:
-	k6 run loadtest/k6/scripts/orders-smoke.js
+	$(K6) run loadtest/k6/scripts/orders-smoke.js
 
 load-ramp:
-	k6 run loadtest/k6/scripts/orders-ramp.js
+	$(K6) run loadtest/k6/scripts/orders-ramp.js
+
+load-soak:
+	$(K6) run loadtest/k6/scripts/orders-soak.js
+
+load-arrival:
+	$(K6) run loadtest/k6/scripts/orders-arrival.js
 
 load-smoke-with-prefill: load-prefill load-smoke
 
 load-ramp-with-prefill: load-prefill load-ramp
+
+load-soak-with-prefill: load-prefill load-soak
+
+load-arrival-with-prefill: load-prefill load-arrival
 
 mocks:
 	@if command -v mockery >/dev/null 2>&1; then \

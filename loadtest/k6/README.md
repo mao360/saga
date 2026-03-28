@@ -10,6 +10,8 @@
   - `account_id=acc-1`
 - Start monitoring stack:
   - `docker compose --env-file .env.monitoring -f docker-compose.monitoring.yaml up -d`
+  - Grafana dashboards are persisted in Docker volume `${GRAFANA_DATA_VOLUME:-grafana_data}`.
+  - Do not use `docker compose down -v` for monitoring unless you want to reset dashboards.
 
 ## 2. Smoke test
 

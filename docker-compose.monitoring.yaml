@@ -14,6 +14,8 @@ services:
     image: ${GRAFANA_IMAGE:-grafana/grafana:latest}
     container_name: ${GRAFANA_CONTAINER_NAME:-grafana}
     restart: unless-stopped
+    volumes:
+      - ${GRAFANA_DATA_VOLUME:-grafana_data}:/var/lib/grafana
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
     environment:
@@ -52,3 +54,7 @@ networks:
   saga-net:
     external: true
     name: ${SAGA_NETWORK:-saga-net}
+
+volumes:
+  grafana_data:
+    name: ${GRAFANA_DATA_VOLUME:-grafana_data}

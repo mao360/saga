@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"os/signal"
 	"syscall"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/mao360/saga/inventory/internal/repository"
 	"github.com/mao360/saga/inventory/internal/transport"
 	"github.com/mao360/saga/inventory/internal/usecase"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -32,7 +35,25 @@ func Run() error {
 
 	inventoryRepo := repository.NewInventoryRepository(c.Database)
 	inventoryUseCase := usecase.NewInventoryUseCase(inventoryRepo, c.KafkaProducer, c.Cfg.TopicInventoryEvents)
-	kafkaHandler := transport.NewKafkaHandler(inventoryUseCase, c.Log)
+	kafkaHandler := transport.NewKafkaHandler(inventoryUseCase, c.Log, c.Tel)
+
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.Handler())
+	metricsMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	metricsSrv := &http.Server{
+		Addr:    ":" + c.Cfg.HTTPPort,
+		Handler: metricsMux,
+	}
+	go func() {
+		c.Log.Info("metrics server starting", "addr", metricsSrv.Addr)
+		if serveErr := metricsSrv.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			c.Log.Error("metrics server failed", "err", serveErr)
+			stop()
+		}
+	}()
 
 	c.Log.Info("kafka consumer starting", "topic", c.Cfg.TopicCommands)
 	go func() {
@@ -56,6 +77,7 @@ func Run() error {
 	c.Log.Info("inventory command contract", "example", string(sample))
 
 	<-ctx.Done()
+	_ = metricsSrv.Shutdown(context.Background())
 	c.Log.Info("inventory service stopped")
 
 	return nil

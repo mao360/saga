@@ -6,12 +6,18 @@ import (
 	"net/http"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/mao360/saga/order/internal/observability"
 	"github.com/mao360/saga/order/internal/platform/postgres"
 	"github.com/mao360/saga/order/internal/repository"
 	"github.com/mao360/saga/order/internal/transport"
 	"github.com/mao360/saga/order/internal/usecase"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func Run() error {
@@ -37,11 +43,12 @@ func Run() error {
 	orderUseCase := usecase.NewOrderUseCase(orderRepo, c.KafkaProducer, c.Cfg.TopicOrderEvents, c.Cfg.TopicCommands)
 	httpHandler := transport.NewHTTPHandler(orderUseCase, orderRepo, c.Log)
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
 	httpHandler.Register(mux)
 
 	httpSrv := &http.Server{
 		Addr:    ":" + c.Cfg.HTTPPort,
-		Handler: mux,
+		Handler: observability.Middleware(c.Tel, mux),
 	}
 
 	go func() {
@@ -55,8 +62,25 @@ func Run() error {
 	go func() {
 		c.Log.Info("kafka consumer starting")
 		err := c.KafkaConsumer.Run(ctx, func(ctx context.Context, rec *kgo.Record) error {
+			start := time.Now()
+			span := trace.SpanFromContext(ctx)
+			if c.Tel != nil {
+				ctx = observability.ExtractKafkaHeaders(ctx, c.Tel.Propagator, rec.Headers)
+				ctx, span = c.Tel.Tracer.Start(ctx, "order.kafka.consume",
+					trace.WithAttributes(
+						attribute.String("kafka.topic", rec.Topic),
+						attribute.Int64("kafka.offset", rec.Offset),
+					),
+				)
+				defer span.End()
+			}
+
 			var payload map[string]any
 			if err := json.Unmarshal(rec.Value, &payload); err != nil {
+				if c.Tel != nil {
+					c.Tel.Metrics.ObserveKafkaConsume(rec.Topic, err, time.Since(start))
+					span.SetStatus(codes.Error, err.Error())
+				}
 				return err
 			}
 			c.Log.Info("event received",
@@ -64,6 +88,10 @@ func Run() error {
 				"key", string(rec.Key),
 				"payload", payload,
 			)
+			if c.Tel != nil {
+				c.Tel.Metrics.ObserveKafkaConsume(rec.Topic, nil, time.Since(start))
+				span.SetStatus(codes.Ok, "processed")
+			}
 			return nil
 		})
 		if err != nil {

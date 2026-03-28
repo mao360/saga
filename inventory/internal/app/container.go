@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/mao360/saga/inventory/internal/observability"
 	"github.com/mao360/saga/inventory/internal/platform/config"
 	"github.com/mao360/saga/inventory/internal/platform/kafka"
 	"github.com/mao360/saga/inventory/internal/platform/logger"
@@ -14,6 +16,7 @@ import (
 type Container struct {
 	Cfg config.Config
 	Log *slog.Logger
+	Tel *observability.Telemetry
 
 	KafkaProducer *kafka.Producer
 	KafkaConsumer *kafka.Consumer
@@ -28,6 +31,10 @@ func NewContainer() (*Container, error) {
 	}
 
 	log := logger.New()
+	tel, err := observability.New("inventory-service", log)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.DatabaseConnectTimeout)
 	defer cancel()
 
@@ -36,8 +43,9 @@ func NewContainer() (*Container, error) {
 		return nil, err
 	}
 
-	producer, err := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaClientID)
+	producer, err := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaClientID, tel)
 	if err != nil {
+		_ = tel.Shutdown(context.Background())
 		pool.Close()
 		return nil, err
 	}
@@ -53,6 +61,7 @@ func NewContainer() (*Container, error) {
 	)
 	if err != nil {
 		producer.Close()
+		_ = tel.Shutdown(context.Background())
 		pool.Close()
 		return nil, err
 	}
@@ -60,6 +69,7 @@ func NewContainer() (*Container, error) {
 	return &Container{
 		Cfg:           *cfg,
 		Log:           log,
+		Tel:           tel,
 		KafkaProducer: producer,
 		KafkaConsumer: consumer,
 		Database:      pool,
@@ -75,6 +85,11 @@ func (c *Container) Close() error {
 	}
 	if c.Database != nil {
 		c.Database.Close()
+	}
+	if c.Tel != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = c.Tel.Shutdown(ctx)
 	}
 	return nil
 }

@@ -15,12 +15,17 @@ type OrderRepository interface {
 	GetByID(ctx context.Context, id string) (domain.Order, error)
 }
 
+type SagaCreator interface {
+	Create(ctx context.Context, sagaID, orderID string) error
+}
+
 type EventPublisher interface {
 	Publish(ctx context.Context, topic string, key, value []byte) error
 }
 
 type OrderUseCase struct {
 	repo          OrderRepository
+	saga          SagaCreator
 	publisher     EventPublisher
 	orderTopic    string
 	commandsTopic string
@@ -45,9 +50,10 @@ type sagaCommand struct {
 	Amount    int64  `json:"amount,omitempty"`
 }
 
-func NewOrderUseCase(repo OrderRepository, publisher EventPublisher, orderTopic, commandsTopic string) *OrderUseCase {
+func NewOrderUseCase(repo OrderRepository, saga SagaCreator, publisher EventPublisher, orderTopic, commandsTopic string) *OrderUseCase {
 	return &OrderUseCase{
 		repo:          repo,
+		saga:          saga,
 		publisher:     publisher,
 		orderTopic:    orderTopic,
 		commandsTopic: commandsTopic,
@@ -63,6 +69,7 @@ func (u *OrderUseCase) CreateOrder(ctx context.Context, input CreateOrderInput) 
 		SKU:       strings.TrimSpace(input.SKU),
 		Qty:       input.Qty,
 		AccountID: strings.TrimSpace(input.AccountID),
+		Status:    domain.OrderStatusPending,
 		CreatedAt: now,
 	}
 
@@ -74,6 +81,11 @@ func (u *OrderUseCase) CreateOrder(ctx context.Context, input CreateOrderInput) 
 		return domain.Order{}, err
 	}
 
+	sagaID := "saga-" + order.ID
+	if err := u.saga.Create(ctx, sagaID, order.ID); err != nil {
+		return domain.Order{}, err
+	}
+
 	payload, err := json.Marshal(order)
 	if err != nil {
 		return domain.Order{}, err
@@ -82,8 +94,6 @@ func (u *OrderUseCase) CreateOrder(ctx context.Context, input CreateOrderInput) 
 	if err := u.publisher.Publish(ctx, u.orderTopic, []byte(order.ID), payload); err != nil {
 		return domain.Order{}, err
 	}
-
-	sagaID := "saga-" + order.ID
 	reserve := sagaCommand{
 		CommandID: "cmd-reserve-" + order.ID,
 		Type:      "reserve_inventory",

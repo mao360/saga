@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mao360/saga/order/internal/domain"
 	"github.com/mao360/saga/order/internal/observability"
 	"github.com/mao360/saga/order/internal/platform/postgres"
 	"github.com/mao360/saga/order/internal/repository"
@@ -39,8 +40,11 @@ func Run() error {
 	c.Log.Info("migrations completed")
 
 	orderRepo := repository.NewOrderRepository(c.Database)
+	sagaRepo := repository.NewSagaRepository(c.Database)
 
-	orderUseCase := usecase.NewOrderUseCase(orderRepo, c.KafkaProducer, c.Cfg.TopicOrderEvents, c.Cfg.TopicCommands)
+	orderUseCase := usecase.NewOrderUseCase(orderRepo, sagaRepo, c.KafkaProducer, c.Cfg.TopicOrderEvents, c.Cfg.TopicCommands)
+	processEventUseCase := usecase.NewProcessEventUseCase(orderRepo, sagaRepo, c.KafkaProducer, c.Cfg.TopicCommands)
+
 	httpHandler := transport.NewHTTPHandler(orderUseCase, orderRepo, c.Log)
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
@@ -75,19 +79,32 @@ func Run() error {
 				defer span.End()
 			}
 
-			var payload map[string]any
-			if err := json.Unmarshal(rec.Value, &payload); err != nil {
+			var event domain.SagaEvent
+			if err := json.Unmarshal(rec.Value, &event); err != nil {
+				c.Log.Error("invalid event payload", "err", err, "topic", rec.Topic, "offset", rec.Offset)
 				if c.Tel != nil {
 					c.Tel.Metrics.ObserveKafkaConsume(rec.Topic, err, time.Since(start))
 					span.SetStatus(codes.Error, err.Error())
 				}
 				return err
 			}
+
 			c.Log.Info("event received",
+				"type", event.Type,
+				"saga_id", event.SagaID,
+				"order_id", event.OrderID,
 				"topic", rec.Topic,
-				"key", string(rec.Key),
-				"payload", payload,
 			)
+
+			if err := processEventUseCase.ProcessEvent(ctx, event); err != nil {
+				c.Log.Error("event processing failed", "err", err, "type", event.Type, "saga_id", event.SagaID)
+				if c.Tel != nil {
+					c.Tel.Metrics.ObserveKafkaConsume(rec.Topic, err, time.Since(start))
+					span.SetStatus(codes.Error, err.Error())
+				}
+				return err
+			}
+
 			if c.Tel != nil {
 				c.Tel.Metrics.ObserveKafkaConsume(rec.Topic, nil, time.Since(start))
 				span.SetStatus(codes.Ok, "processed")

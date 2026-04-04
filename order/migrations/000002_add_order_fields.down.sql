@@ -1,0 +1,5 @@
+ALTER TABLE orders
+    DROP COLUMN IF EXISTS sku,
+    DROP COLUMN IF EXISTS qty,
+    DROP COLUMN IF EXISTS account_id,
+    DROP COLUMN IF EXISTS status;

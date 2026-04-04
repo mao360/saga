@@ -19,24 +19,27 @@ func NewOrderRepository(db *pgxpool.Pool) *OrderRepository {
 
 func (r *OrderRepository) Save(ctx context.Context, order domain.Order) error {
 	const q = `
-	insert into orders (id, customer, amount, created_at)
-	values ($1, $2, $3, $4)`
-	_, err := r.db.Exec(ctx, q, order.ID, order.Customer, order.Amount, order.CreatedAt)
+	insert into orders (id, customer, amount, sku, qty, account_id, status, created_at)
+	values ($1, $2, $3, $4, $5, $6, $7, $8)`
+	_, err := r.db.Exec(ctx, q,
+		order.ID, order.Customer, order.Amount,
+		order.SKU, order.Qty, order.AccountID,
+		order.Status, order.CreatedAt,
+	)
 	return err
 }
 
 func (r *OrderRepository) GetByID(ctx context.Context, id string) (domain.Order, error) {
 	const q = `
-	select id, customer, amount, created_at
+	select id, customer, amount, sku, qty, account_id, status, created_at
 	from orders
 	where id = $1`
 
-	var order domain.Order
+	var o domain.Order
 	err := r.db.QueryRow(ctx, q, id).Scan(
-		&order.ID,
-		&order.Customer,
-		&order.Amount,
-		&order.CreatedAt,
+		&o.ID, &o.Customer, &o.Amount,
+		&o.SKU, &o.Qty, &o.AccountID,
+		&o.Status, &o.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -44,8 +47,13 @@ func (r *OrderRepository) GetByID(ctx context.Context, id string) (domain.Order,
 		}
 		return domain.Order{}, err
 	}
+	return o, nil
+}
 
-	return order, nil
+func (r *OrderRepository) UpdateStatus(ctx context.Context, orderID, status string) error {
+	const q = `update orders set status = $1 where id = $2`
+	_, err := r.db.Exec(ctx, q, status, orderID)
+	return err
 }
 
 func (r *OrderRepository) Ping(ctx context.Context) error {

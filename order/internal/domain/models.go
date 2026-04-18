@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 const (
 	OrderStatusPending   = "pending"
@@ -25,6 +29,19 @@ type SagaState struct {
 	OrderID         string
 	InventoryStatus string // pending | reserved | rejected | released
 	PaymentStatus   string // pending | charged | rejected | refunded
+}
+
+// OutboxMessage — строка таблицы outbox_messages. Перед публикацией в Kafka
+// сообщение сохраняется в той же транзакции, что и бизнес-изменения, что
+// устраняет dual-write и даёт at-least-once доставку.
+type OutboxMessage struct {
+	ID        uuid.UUID
+	Topic     string
+	Key       string
+	Payload   []byte
+	Headers   []byte
+	CreatedAt time.Time
+	Attempts  int
 }
 
 // SagaEvent — унифицированный тип события, которое order-сервис получает

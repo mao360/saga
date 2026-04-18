@@ -5,6 +5,7 @@ package mocks
 import (
 	context "context"
 
+	postgres "github.com/mao360/saga/order/internal/platform/postgres"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -21,17 +22,17 @@ func (_m *SagaCreator) EXPECT() *SagaCreator_Expecter {
 	return &SagaCreator_Expecter{mock: &_m.Mock}
 }
 
-// Create provides a mock function with given fields: ctx, sagaID, orderID
-func (_m *SagaCreator) Create(ctx context.Context, sagaID string, orderID string) error {
-	ret := _m.Called(ctx, sagaID, orderID)
+// Create provides a mock function with given fields: ctx, q, sagaID, orderID
+func (_m *SagaCreator) Create(ctx context.Context, q postgres.DBTX, sagaID string, orderID string) error {
+	ret := _m.Called(ctx, q, sagaID, orderID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Create")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
-		r0 = rf(ctx, sagaID, orderID)
+	if rf, ok := ret.Get(0).(func(context.Context, postgres.DBTX, string, string) error); ok {
+		r0 = rf(ctx, q, sagaID, orderID)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -46,15 +47,16 @@ type SagaCreator_Create_Call struct {
 
 // Create is a helper method to define mock.On call
 //   - ctx context.Context
+//   - q postgres.DBTX
 //   - sagaID string
 //   - orderID string
-func (_e *SagaCreator_Expecter) Create(ctx interface{}, sagaID interface{}, orderID interface{}) *SagaCreator_Create_Call {
-	return &SagaCreator_Create_Call{Call: _e.mock.On("Create", ctx, sagaID, orderID)}
+func (_e *SagaCreator_Expecter) Create(ctx interface{}, q interface{}, sagaID interface{}, orderID interface{}) *SagaCreator_Create_Call {
+	return &SagaCreator_Create_Call{Call: _e.mock.On("Create", ctx, q, sagaID, orderID)}
 }
 
-func (_c *SagaCreator_Create_Call) Run(run func(ctx context.Context, sagaID string, orderID string)) *SagaCreator_Create_Call {
+func (_c *SagaCreator_Create_Call) Run(run func(ctx context.Context, q postgres.DBTX, sagaID string, orderID string)) *SagaCreator_Create_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string))
+		run(args[0].(context.Context), args[1].(postgres.DBTX), args[2].(string), args[3].(string))
 	})
 	return _c
 }
@@ -64,7 +66,7 @@ func (_c *SagaCreator_Create_Call) Return(_a0 error) *SagaCreator_Create_Call {
 	return _c
 }
 
-func (_c *SagaCreator_Create_Call) RunAndReturn(run func(context.Context, string, string) error) *SagaCreator_Create_Call {
+func (_c *SagaCreator_Create_Call) RunAndReturn(run func(context.Context, postgres.DBTX, string, string) error) *SagaCreator_Create_Call {
 	_c.Call.Return(run)
 	return _c
 }

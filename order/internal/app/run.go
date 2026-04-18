@@ -10,6 +10,7 @@ import (
 
 	"github.com/mao360/saga/order/internal/domain"
 	"github.com/mao360/saga/order/internal/observability"
+	"github.com/mao360/saga/order/internal/platform/outbox"
 	"github.com/mao360/saga/order/internal/platform/postgres"
 	"github.com/mao360/saga/order/internal/repository"
 	"github.com/mao360/saga/order/internal/transport"
@@ -41,9 +42,19 @@ func Run() error {
 
 	orderRepo := repository.NewOrderRepository(c.Database)
 	sagaRepo := repository.NewSagaRepository(c.Database)
+	outboxRepo := repository.NewOutboxRepository(c.Database)
 
-	orderUseCase := usecase.NewOrderUseCase(orderRepo, sagaRepo, c.KafkaProducer, c.Cfg.TopicOrderEvents, c.Cfg.TopicCommands)
-	processEventUseCase := usecase.NewProcessEventUseCase(orderRepo, sagaRepo, c.KafkaProducer, c.Cfg.TopicCommands)
+	orderUseCase := usecase.NewOrderUseCase(orderRepo, sagaRepo, outboxRepo, c.TxMgr, c.Cfg.TopicOrderEvents, c.Cfg.TopicCommands)
+	processEventUseCase := usecase.NewProcessEventUseCase(orderRepo, sagaRepo, outboxRepo, c.TxMgr, c.Cfg.TopicCommands)
+
+	relay := outbox.New(c.Database, outboxRepo, outboxRepo, c.KafkaProducer, c.Log, outbox.Config{
+		PollInterval: c.Cfg.OutboxPollInterval,
+		BatchSize:    c.Cfg.OutboxBatchSize,
+	})
+	cleaner := outbox.NewCleaner(outboxRepo, c.Log, outbox.CleanerConfig{
+		Interval:  c.Cfg.OutboxCleanerInterval,
+		Retention: c.Cfg.OutboxRetention,
+	})
 
 	httpHandler := transport.NewHTTPHandler(orderUseCase, orderRepo, c.Log)
 	mux := http.NewServeMux()
@@ -60,6 +71,19 @@ func Run() error {
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			c.Log.Error("http server failed", "err", err)
 			stop()
+		}
+	}()
+
+	go func() {
+		if err := relay.Run(ctx); err != nil {
+			c.Log.Error("outbox relay exited with error", "err", err)
+			stop()
+		}
+	}()
+
+	go func() {
+		if err := cleaner.Run(ctx); err != nil {
+			c.Log.Error("outbox cleaner exited with error", "err", err)
 		}
 	}()
 

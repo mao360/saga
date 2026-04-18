@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,11 @@ type Config struct {
 
 	DatabaseConnectTimeout time.Duration `yaml:"database_connect_timeout"`
 	ShutdownTimeout        time.Duration `yaml:"shutdown_timeout"`
+
+	OutboxPollInterval      time.Duration `yaml:"outbox_poll_interval"`
+	OutboxBatchSize         int           `yaml:"outbox_batch_size"`
+	OutboxCleanerInterval   time.Duration `yaml:"outbox_cleaner_interval"`
+	OutboxRetention         time.Duration `yaml:"outbox_retention"`
 }
 
 func Load() (Config, error) {
@@ -59,6 +65,11 @@ func defaultConfig() Config {
 
 		DatabaseConnectTimeout: 10 * time.Second,
 		ShutdownTimeout:        5 * time.Second,
+
+		OutboxPollInterval:    200 * time.Millisecond,
+		OutboxBatchSize:       50,
+		OutboxCleanerInterval: 10 * time.Minute,
+		OutboxRetention:       7 * 24 * time.Hour,
 	}
 }
 
@@ -87,6 +98,11 @@ func (c *Config) applyEnv() {
 
 	c.DatabaseConnectTimeout = parseDurationOr(getOr("DATABASE_CONNECT_TIMEOUT", c.DatabaseConnectTimeout.String()), c.DatabaseConnectTimeout)
 	c.ShutdownTimeout = parseDurationOr(getOr("SHUTDOWN_TIMEOUT", c.ShutdownTimeout.String()), c.ShutdownTimeout)
+
+	c.OutboxPollInterval = parseDurationOr(getOr("OUTBOX_POLL_INTERVAL", c.OutboxPollInterval.String()), c.OutboxPollInterval)
+	c.OutboxBatchSize = parseIntOr(getOr("OUTBOX_BATCH_SIZE", strconv.Itoa(c.OutboxBatchSize)), c.OutboxBatchSize)
+	c.OutboxCleanerInterval = parseDurationOr(getOr("OUTBOX_CLEANER_INTERVAL", c.OutboxCleanerInterval.String()), c.OutboxCleanerInterval)
+	c.OutboxRetention = parseDurationOr(getOr("OUTBOX_RETENTION", c.OutboxRetention.String()), c.OutboxRetention)
 }
 
 func (c *Config) normalize() {
@@ -130,4 +146,12 @@ func parseDurationOr(v string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+func parseIntOr(v string, def int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return def
+	}
+	return n
 }

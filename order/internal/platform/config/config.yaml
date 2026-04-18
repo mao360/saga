@@ -14,3 +14,8 @@ topic_dlq: "saga.dlq"
 database_dsn: "postgres://order:order@localhost:5433/order?sslmode=disable"
 database_connect_timeout: 10s
 shutdown_timeout: 5s
+
+outbox_poll_interval: 200ms
+outbox_batch_size: 50
+outbox_cleaner_interval: 10m
+outbox_retention: 168h

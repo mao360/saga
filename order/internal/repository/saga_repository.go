@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mao360/saga/order/internal/domain"
+	"github.com/mao360/saga/order/internal/platform/postgres"
 )
 
 type SagaRepository struct {
@@ -18,9 +19,9 @@ func NewSagaRepository(db *pgxpool.Pool) *SagaRepository {
 	return &SagaRepository{db: db}
 }
 
-func (r *SagaRepository) Create(ctx context.Context, sagaID, orderID string) error {
+func (r *SagaRepository) Create(ctx context.Context, q postgres.DBTX, sagaID, orderID string) error {
 	now := time.Now().UTC()
-	_, err := r.db.Exec(ctx, `
+	_, err := q.Exec(ctx, `
 		insert into saga_state (saga_id, order_id, inventory_status, payment_status, created_at, updated_at)
 		values ($1, $2, 'pending', 'pending', $3, $4)
 		on conflict (saga_id) do nothing
@@ -28,41 +29,12 @@ func (r *SagaRepository) Create(ctx context.Context, sagaID, orderID string) err
 	return err
 }
 
-// ApplyInventoryStatus атомарно обновляет inventory_status и возвращает
-// актуальное состояние саги. SELECT FOR UPDATE сериализует два конкурирующих
-// события (inventory + payment), чтобы решение о финализации принималось
-// единожды на основе полного снимка.
-func (r *SagaRepository) ApplyInventoryStatus(ctx context.Context, sagaID, status string) (domain.SagaState, error) {
-	return r.apply(ctx, sagaID, func(tx pgx.Tx, state *domain.SagaState) error {
-		state.InventoryStatus = status
-		_, err := tx.Exec(ctx,
-			`update saga_state set inventory_status = $1, updated_at = $2 where saga_id = $3`,
-			status, time.Now().UTC(), sagaID,
-		)
-		return err
-	})
-}
-
-func (r *SagaRepository) ApplyPaymentStatus(ctx context.Context, sagaID, status string) (domain.SagaState, error) {
-	return r.apply(ctx, sagaID, func(tx pgx.Tx, state *domain.SagaState) error {
-		state.PaymentStatus = status
-		_, err := tx.Exec(ctx,
-			`update saga_state set payment_status = $1, updated_at = $2 where saga_id = $3`,
-			status, time.Now().UTC(), sagaID,
-		)
-		return err
-	})
-}
-
-func (r *SagaRepository) apply(ctx context.Context, sagaID string, fn func(pgx.Tx, *domain.SagaState) error) (domain.SagaState, error) {
-	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return domain.SagaState{}, err
-	}
-	defer tx.Rollback(ctx)
-
+// LockState блокирует строку саги SELECT FOR UPDATE и возвращает её состояние.
+// Требует транзакции — сериализует конкурирующие события, чтобы решение о
+// следующем шаге принималось на актуальном снимке.
+func (r *SagaRepository) LockState(ctx context.Context, tx pgx.Tx, sagaID string) (domain.SagaState, error) {
 	var state domain.SagaState
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		select saga_id, order_id, inventory_status, payment_status
 		from saga_state where saga_id = $1 for update
 	`, sagaID).Scan(&state.SagaID, &state.OrderID, &state.InventoryStatus, &state.PaymentStatus)
@@ -72,12 +44,21 @@ func (r *SagaRepository) apply(ctx context.Context, sagaID string, fn func(pgx.T
 		}
 		return domain.SagaState{}, err
 	}
-
-	if err = fn(tx, &state); err != nil {
-		return domain.SagaState{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.SagaState{}, err
-	}
 	return state, nil
+}
+
+func (r *SagaRepository) UpdateInventoryStatus(ctx context.Context, q postgres.DBTX, sagaID, status string) error {
+	_, err := q.Exec(ctx,
+		`update saga_state set inventory_status = $1, updated_at = $2 where saga_id = $3`,
+		status, time.Now().UTC(), sagaID,
+	)
+	return err
+}
+
+func (r *SagaRepository) UpdatePaymentStatus(ctx context.Context, q postgres.DBTX, sagaID, status string) error {
+	_, err := q.Exec(ctx,
+		`update saga_state set payment_status = $1, updated_at = $2 where saga_id = $3`,
+		status, time.Now().UTC(), sagaID,
+	)
+	return err
 }

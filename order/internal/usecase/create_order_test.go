@@ -8,43 +8,40 @@ import (
 	"github.com/mao360/saga/order/internal/usecase/mocks"
 )
 
-func TestOrderUseCase_CreateOrder(t *testing.T) {
+func TestOrderUseCase_CreateOrder_InvalidInput(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   CreateOrderInput
-		setup   func(repo *mocks.OrderRepository, publisher *mocks.EventPublisher)
 		wantErr error
 	}{
 		{
-			name: "invalid order input",
-			input: CreateOrderInput{
-				Customer: "",
-				Amount:   0,
-			},
-			setup:   func(_ *mocks.OrderRepository, _ *mocks.EventPublisher) {},
+			name:    "empty customer and zero amount",
+			input:   CreateOrderInput{Customer: "", Amount: 0},
 			wantErr: domain.ErrInvalidOrder,
 		},
-		// TODO: add happy-path and error-path cases:
-		// - repo save failed
-		// - publisher failed
-		// - success path with repo + publisher expectations
+		{
+			name:    "missing sku",
+			input:   CreateOrderInput{Customer: "alice", Amount: 100, Qty: 1, AccountID: "acc-1"},
+			wantErr: domain.ErrInvalidOrder,
+		},
+		{
+			name:    "zero qty",
+			input:   CreateOrderInput{Customer: "alice", Amount: 100, SKU: "sku-1", Qty: 0, AccountID: "acc-1"},
+			wantErr: domain.ErrInvalidOrder,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo := mocks.NewOrderRepository(t)
-			publisher := mocks.NewEventPublisher(t)
-			tt.setup(repo, publisher)
-
-			u := NewOrderUseCase(repo, mocks.NewSagaCreator(t), publisher, "test-topic", "test-commands")
+			u := NewOrderUseCase(
+				mocks.NewOrderRepository(t),
+				mocks.NewSagaCreator(t),
+				mocks.NewOutboxEnqueuer(t),
+				mocks.NewTxRunner(t),
+				"test-topic", "test-commands",
+			)
 
 			_, err := u.CreateOrder(context.Background(), tt.input)
-			if tt.wantErr == nil {
-				if err != nil {
-					t.Fatalf("CreateOrder() unexpected error: %v", err)
-				}
-				return
-			}
 			if err != tt.wantErr {
 				t.Fatalf("CreateOrder() error = %v, want %v", err, tt.wantErr)
 			}
@@ -74,11 +71,7 @@ func TestOrderUseCase_GetOrderByID(t *testing.T) {
 					GetByID(context.Background(), "order-1").
 					Return(domain.Order{ID: "order-1", Customer: "alice", Amount: 100}, nil)
 			},
-			want: domain.Order{
-				ID:       "order-1",
-				Customer: "alice",
-				Amount:   100,
-			},
+			want:    domain.Order{ID: "order-1", Customer: "alice", Amount: 100},
 			wantErr: false,
 		},
 	}
@@ -86,10 +79,15 @@ func TestOrderUseCase_GetOrderByID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := mocks.NewOrderRepository(t)
-			publisher := mocks.NewEventPublisher(t)
 			tt.setup(repo)
 
-			u := NewOrderUseCase(repo, mocks.NewSagaCreator(t), publisher, "test-topic", "test-commands")
+			u := NewOrderUseCase(
+				repo,
+				mocks.NewSagaCreator(t),
+				mocks.NewOutboxEnqueuer(t),
+				mocks.NewTxRunner(t),
+				"test-topic", "test-commands",
+			)
 			got, err := u.GetOrderByID(context.Background(), tt.id)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("GetOrderByID() error = %v, wantErr %v", err, tt.wantErr)

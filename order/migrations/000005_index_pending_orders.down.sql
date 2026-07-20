@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_orders_pending_created_at;

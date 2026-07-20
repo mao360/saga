@@ -101,3 +101,28 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  # Deploy to the VPS over SSH: pull the freshly built images and restart the
+  # stack. Gated by the DEPLOY_ENABLED repo variable so it stays dormant until
+  # the VPS is prepared (repo cloned, env files set, secrets added).
+  deploy:
+    name: deploy
+    needs: images
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_SSH_PORT || 22 }}
+          script: |
+            set -e
+            cd ~/saga
+            git pull --ff-only
+            export IMAGE_TAG=${{ github.sha }}
+            bash scripts/deploy.sh

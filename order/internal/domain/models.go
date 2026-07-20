@@ -12,15 +12,18 @@ const (
 	OrderStatusFailed    = "failed"
 )
 
+// Order сериализуется прямо в HTTP-ответ, поэтому теги обязательны: без них
+// наружу уезжают имена Go-полей (ID, SKU, AccountID), и любой клиент,
+// ожидающий snake_case, молча получает undefined.
 type Order struct {
-	ID        string
-	Customer  string
-	Amount    int64
-	SKU       string
-	Qty       int64
-	AccountID string
-	Status    string
-	CreatedAt time.Time
+	ID        string    `json:"id"`
+	Customer  string    `json:"customer"`
+	Amount    int64     `json:"amount"`
+	SKU       string    `json:"sku"`
+	Qty       int64     `json:"qty"`
+	AccountID string    `json:"account_id"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // SagaState хранит текущие статусы шагов саги в order-сервисе.

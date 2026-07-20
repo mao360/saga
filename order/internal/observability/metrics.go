@@ -14,6 +14,9 @@ type Metrics struct {
 	kafkaConsumeDur   *prometheus.HistogramVec
 	kafkaPublishTotal *prometheus.CounterVec
 	kafkaPublishDur   *prometheus.HistogramVec
+	sagaDuration      *prometheus.HistogramVec
+	sagaPending       prometheus.Gauge
+	sagaOldestPending prometheus.Gauge
 }
 
 func NewMetrics(reg prometheus.Registerer) *Metrics {
@@ -69,6 +72,34 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			},
 			[]string{"topic"},
 		),
+		// Ключевая бизнес-метрика: сколько живёт распределённая транзакция
+		// целиком — от создания заказа до терминального статуса. HTTP-латентность
+		// этого не показывает, потому что POST /orders отвечает сразу после
+		// записи в outbox, когда сага ещё даже не началась.
+		sagaDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Namespace: "order",
+				Name:      "saga_duration_seconds",
+				Help:      "End-to-end saga duration from order creation to terminal status.",
+				// 5ms .. ~82s: под нагрузкой хвост уезжает далеко за DefBuckets.
+				Buckets: prometheus.ExponentialBuckets(0.005, 2, 15),
+			},
+			[]string{"status"},
+		),
+		sagaPending: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Namespace: "order",
+				Name:      "saga_pending_orders",
+				Help:      "Number of orders currently in non-terminal status.",
+			},
+		),
+		sagaOldestPending: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Namespace: "order",
+				Name:      "saga_oldest_pending_age_seconds",
+				Help:      "Age of the oldest order still in non-terminal status.",
+			},
+		),
 	}
 
 	reg.MustRegister(
@@ -78,6 +109,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		m.kafkaConsumeDur,
 		m.kafkaPublishTotal,
 		m.kafkaPublishDur,
+		m.sagaDuration,
+		m.sagaPending,
+		m.sagaOldestPending,
 	)
 	return m
 }
@@ -99,6 +133,19 @@ func (m *Metrics) ObserveKafkaConsume(topic string, err error, d time.Duration) 
 func (m *Metrics) ObserveKafkaPublish(topic string, err error, d time.Duration) {
 	m.kafkaPublishTotal.WithLabelValues(topic, statusFromErr(err)).Inc()
 	m.kafkaPublishDur.WithLabelValues(topic).Observe(d.Seconds())
+}
+
+// ObserveSagaFinished вызывается после коммита транзакции, которая перевела
+// заказ в терминальный статус. status — completed или failed.
+func (m *Metrics) ObserveSagaFinished(status string, d time.Duration) {
+	m.sagaDuration.WithLabelValues(status).Observe(d.Seconds())
+}
+
+// SetSagaPending обновляет снимок незавершённых саг. Заполняется фоновым
+// сборщиком: застрявшая сага не порождает событий и иначе была бы не видна.
+func (m *Metrics) SetSagaPending(count int64, oldestAge time.Duration) {
+	m.sagaPending.Set(float64(count))
+	m.sagaOldestPending.Set(oldestAge.Seconds())
 }
 
 func statusFromErr(err error) string {

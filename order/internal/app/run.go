@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os/signal"
 	"syscall"
@@ -21,6 +22,34 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// pendingCollectInterval — период опроса незавершённых саг. Запрос дешёвый
+// (агрегат по частичному индексу), но чаще скрейпа Prometheus смысла нет.
+const pendingCollectInterval = 5 * time.Second
+
+// collectPendingSagas периодически публикует число зависших саг и возраст самой
+// старой. Сага, застрявшая из-за потерянного события, не генерирует трафика —
+// в rate-метриках её не видно, поэтому состояние снимается опросом.
+func collectPendingSagas(ctx context.Context, repo *repository.OrderRepository, m *observability.Metrics, log *slog.Logger) {
+	ticker := time.NewTicker(pendingCollectInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			count, oldest, err := repo.PendingStats(ctx)
+			if err != nil {
+				if ctx.Err() == nil {
+					log.Error("pending saga stats failed", "err", err)
+				}
+				continue
+			}
+			m.SetSagaPending(count, oldest)
+		}
+	}
+}
 
 func Run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -44,8 +73,15 @@ func Run() error {
 	sagaRepo := repository.NewSagaRepository(c.Database)
 	outboxRepo := repository.NewOutboxRepository(c.Database)
 
+	// Интерфейс заполняем только при живой телеметрии: типизированный nil-указатель
+	// в интерфейсе перестал бы быть nil и уронил бы use case при вызове.
+	var sagaMetrics usecase.SagaMetrics
+	if c.Tel != nil {
+		sagaMetrics = c.Tel.Metrics
+	}
+
 	orderUseCase := usecase.NewOrderUseCase(orderRepo, sagaRepo, outboxRepo, c.TxMgr, c.Cfg.TopicOrderEvents, c.Cfg.TopicCommands)
-	processEventUseCase := usecase.NewProcessEventUseCase(orderRepo, sagaRepo, outboxRepo, c.TxMgr, c.Cfg.TopicCommands)
+	processEventUseCase := usecase.NewProcessEventUseCase(orderRepo, sagaRepo, outboxRepo, c.TxMgr, c.Cfg.TopicCommands, sagaMetrics)
 
 	relay := outbox.New(c.Database, outboxRepo, outboxRepo, c.KafkaProducer, c.Log, outbox.Config{
 		PollInterval: c.Cfg.OutboxPollInterval,
@@ -86,6 +122,10 @@ func Run() error {
 			c.Log.Error("outbox cleaner exited with error", "err", err)
 		}
 	}()
+
+	if c.Tel != nil {
+		go collectPendingSagas(ctx, orderRepo, c.Tel.Metrics, c.Log)
+	}
 
 	go func() {
 		c.Log.Info("kafka consumer starting")

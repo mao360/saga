@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -64,10 +65,31 @@ func (r *OrderRepository) getByID(ctx context.Context, q postgres.DBTX, id strin
 	return o, nil
 }
 
-func (r *OrderRepository) UpdateStatus(ctx context.Context, q postgres.DBTX, orderID, status string) error {
-	const query = `update orders set status = $1 where id = $2`
-	_, err := q.Exec(ctx, query, status, orderID)
-	return err
+// UpdateStatus переводит заказ в новый статус и возвращает время его создания.
+// created_at приходит из того же UPDATE через RETURNING, чтобы вызывающий код
+// мог посчитать полную длительность саги без дополнительного SELECT.
+func (r *OrderRepository) UpdateStatus(ctx context.Context, q postgres.DBTX, orderID, status string) (time.Time, error) {
+	const query = `update orders set status = $1 where id = $2 returning created_at`
+	var createdAt time.Time
+	err := q.QueryRow(ctx, query, status, orderID).Scan(&createdAt)
+	return createdAt, err
+}
+
+// PendingStats возвращает число заказов в нетерминальном статусе и возраст
+// самого старого из них. Используется фоновым сборщиком метрик: сага, которая
+// зависла и не шлёт событий, видна только таким опросом.
+func (r *OrderRepository) PendingStats(ctx context.Context) (int64, time.Duration, error) {
+	const query = `
+		select count(*), coalesce(extract(epoch from now() - min(created_at)), 0)
+		from orders where status = $1`
+	var (
+		count      int64
+		ageSeconds float64
+	)
+	if err := r.db.QueryRow(ctx, query, domain.OrderStatusPending).Scan(&count, &ageSeconds); err != nil {
+		return 0, 0, err
+	}
+	return count, time.Duration(ageSeconds * float64(time.Second)), nil
 }
 
 func (r *OrderRepository) Ping(ctx context.Context) error {

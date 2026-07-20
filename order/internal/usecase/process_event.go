@@ -14,7 +14,22 @@ import (
 // SagaOrderRepository — часть OrderRepository, нужная для обработки событий.
 type SagaOrderRepository interface {
 	GetByIDTx(ctx context.Context, q postgres.DBTX, id string) (domain.Order, error)
-	UpdateStatus(ctx context.Context, q postgres.DBTX, orderID, status string) error
+	UpdateStatus(ctx context.Context, q postgres.DBTX, orderID, status string) (time.Time, error)
+}
+
+// SagaMetrics — то, что use case сообщает наружу о завершившихся сагах.
+// Может быть nil, если телеметрия выключена.
+type SagaMetrics interface {
+	ObserveSagaFinished(status string, d time.Duration)
+}
+
+// sagaOutcome фиксирует терминальный переход, случившийся внутри транзакции.
+// Метрика пишется уже после коммита: иначе откат или ретрай транзакции дал бы
+// наблюдение о саге, которая на самом деле не завершилась.
+type sagaOutcome struct {
+	finished  bool
+	status    string
+	createdAt time.Time
 }
 
 // SagaStateRepository — работа с таблицей saga_state.
@@ -30,6 +45,7 @@ type ProcessEventUseCase struct {
 	outbox        OutboxEnqueuer
 	tx            TxRunner
 	commandsTopic string
+	metrics       SagaMetrics
 }
 
 func NewProcessEventUseCase(
@@ -38,6 +54,7 @@ func NewProcessEventUseCase(
 	outbox OutboxEnqueuer,
 	tx TxRunner,
 	commandsTopic string,
+	metrics SagaMetrics,
 ) *ProcessEventUseCase {
 	return &ProcessEventUseCase{
 		orderRepo:     orderRepo,
@@ -45,6 +62,7 @@ func NewProcessEventUseCase(
 		outbox:        outbox,
 		tx:            tx,
 		commandsTopic: commandsTopic,
+		metrics:       metrics,
 	}
 }
 
@@ -63,7 +81,12 @@ func NewProcessEventUseCase(
 //	payment_refunded                       → order = failed (компенсация завершена)
 //	*_pending (другой шаг ещё не пришёл)  → ждём
 func (u *ProcessEventUseCase) ProcessEvent(ctx context.Context, event domain.SagaEvent) error {
-	return u.tx.Do(ctx, func(tx pgx.Tx) error {
+	var outcome sagaOutcome
+
+	err := u.tx.Do(ctx, func(tx pgx.Tx) error {
+		// Сброс на случай, если TxRunner повторит замыкание после отката.
+		outcome = sagaOutcome{}
+
 		state, err := u.sagaRepo.LockState(ctx, tx, event.SagaID)
 		if err != nil {
 			return err
@@ -77,7 +100,7 @@ func (u *ProcessEventUseCase) ProcessEvent(ctx context.Context, event domain.Sag
 			state.InventoryStatus = "reserved"
 			switch state.PaymentStatus {
 			case "charged":
-				return u.orderRepo.UpdateStatus(ctx, tx, state.OrderID, domain.OrderStatusCompleted)
+				return u.finishOrder(ctx, tx, state.OrderID, domain.OrderStatusCompleted, &outcome)
 			case "rejected":
 				return u.enqueueReleaseInventory(ctx, tx, event, state)
 			}
@@ -91,14 +114,14 @@ func (u *ProcessEventUseCase) ProcessEvent(ctx context.Context, event domain.Sag
 			case "charged":
 				return u.enqueueRefundPayment(ctx, tx, event, state)
 			case "rejected":
-				return u.orderRepo.UpdateStatus(ctx, tx, state.OrderID, domain.OrderStatusFailed)
+				return u.finishOrder(ctx, tx, state.OrderID, domain.OrderStatusFailed, &outcome)
 			}
 
 		case "inventory_released":
 			if err := u.sagaRepo.UpdateInventoryStatus(ctx, tx, event.SagaID, "released"); err != nil {
 				return err
 			}
-			return u.orderRepo.UpdateStatus(ctx, tx, state.OrderID, domain.OrderStatusFailed)
+			return u.finishOrder(ctx, tx, state.OrderID, domain.OrderStatusFailed, &outcome)
 
 		case "payment_charged":
 			if err := u.sagaRepo.UpdatePaymentStatus(ctx, tx, event.SagaID, "charged"); err != nil {
@@ -107,7 +130,7 @@ func (u *ProcessEventUseCase) ProcessEvent(ctx context.Context, event domain.Sag
 			state.PaymentStatus = "charged"
 			switch state.InventoryStatus {
 			case "reserved":
-				return u.orderRepo.UpdateStatus(ctx, tx, state.OrderID, domain.OrderStatusCompleted)
+				return u.finishOrder(ctx, tx, state.OrderID, domain.OrderStatusCompleted, &outcome)
 			case "rejected":
 				return u.enqueueRefundPayment(ctx, tx, event, state)
 			}
@@ -121,18 +144,37 @@ func (u *ProcessEventUseCase) ProcessEvent(ctx context.Context, event domain.Sag
 			case "reserved":
 				return u.enqueueReleaseInventory(ctx, tx, event, state)
 			case "rejected":
-				return u.orderRepo.UpdateStatus(ctx, tx, state.OrderID, domain.OrderStatusFailed)
+				return u.finishOrder(ctx, tx, state.OrderID, domain.OrderStatusFailed, &outcome)
 			}
 
 		case "payment_refunded":
 			if err := u.sagaRepo.UpdatePaymentStatus(ctx, tx, event.SagaID, "refunded"); err != nil {
 				return err
 			}
-			return u.orderRepo.UpdateStatus(ctx, tx, state.OrderID, domain.OrderStatusFailed)
+			return u.finishOrder(ctx, tx, state.OrderID, domain.OrderStatusFailed, &outcome)
 		}
 
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	if outcome.finished && u.metrics != nil {
+		u.metrics.ObserveSagaFinished(outcome.status, time.Since(outcome.createdAt))
+	}
+	return nil
+}
+
+// finishOrder переводит заказ в терминальный статус и запоминает исход в out,
+// чтобы вызывающий код записал длительность саги после коммита.
+func (u *ProcessEventUseCase) finishOrder(ctx context.Context, tx pgx.Tx, orderID, status string, out *sagaOutcome) error {
+	createdAt, err := u.orderRepo.UpdateStatus(ctx, tx, orderID, status)
+	if err != nil {
+		return err
+	}
+	*out = sagaOutcome{finished: true, status: status, createdAt: createdAt}
+	return nil
 }
 
 func (u *ProcessEventUseCase) enqueueReleaseInventory(ctx context.Context, tx pgx.Tx, event domain.SagaEvent, state domain.SagaState) error {

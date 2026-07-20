@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mao360/saga/inventory/internal/domain"
+	"github.com/mao360/saga/inventory/internal/platform/postgres"
 )
 
 const (
@@ -31,38 +32,26 @@ func NewInventoryRepository(db *pgxpool.Pool) *InventoryRepository {
 	return &InventoryRepository{db: db}
 }
 
-func (r *InventoryRepository) Reserve(ctx context.Context, cmd domain.Command) (string, error) {
-	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+// Reserve резервирует товар в рамках переданной транзакции q. Транзакцией
+// владеет вызывающий (usecase), что позволяет записать событие в outbox
+// атомарно с изменением остатка.
+func (r *InventoryRepository) Reserve(ctx context.Context, q postgres.DBTX, cmd domain.Command) (string, error) {
+	alreadyProcessed, err := r.isProcessed(ctx, q, cmd.CommandID)
 	if err != nil {
 		return "", err
 	}
-	defer tx.Rollback(ctx)
-
-	var alreadyProcessed bool
-	if err := tx.QueryRow(ctx,
-		"select exists(select 1 from processed_commands where command_id = $1)",
-		cmd.CommandID,
-	).Scan(&alreadyProcessed); err != nil {
-		return "", err
-	}
 	if alreadyProcessed {
-		if err := tx.Commit(ctx); err != nil {
-			return "", err
-		}
 		return ReserveStatusProcessed, nil
 	}
 
 	var available int64
-	err = tx.QueryRow(ctx,
+	err = q.QueryRow(ctx,
 		"select available_qty from inventory_stock where sku = $1 for update",
 		cmd.SKU,
 	).Scan(&available)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
-				return "", err
-			}
-			if err := tx.Commit(ctx); err != nil {
+			if err := r.markProcessed(ctx, q, cmd.CommandID); err != nil {
 				return "", err
 			}
 			return ReserveStatusRejected, nil
@@ -71,17 +60,14 @@ func (r *InventoryRepository) Reserve(ctx context.Context, cmd domain.Command) (
 	}
 
 	if available < cmd.Qty {
-		if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
-			return "", err
-		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := r.markProcessed(ctx, q, cmd.CommandID); err != nil {
 			return "", err
 		}
 		return ReserveStatusRejected, nil
 	}
 
 	now := time.Now().UTC()
-	tag, err := tx.Exec(ctx, `
+	tag, err := q.Exec(ctx, `
 		insert into inventory_reservation (id, saga_id, order_id, sku, qty, status, created_at, updated_at)
 		values ($1, $2, $3, $4, $5, 'reserved', $6, $7)
 		on conflict (saga_id, sku) do nothing
@@ -90,16 +76,13 @@ func (r *InventoryRepository) Reserve(ctx context.Context, cmd domain.Command) (
 		return "", err
 	}
 	if tag.RowsAffected() == 0 {
-		if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
-			return "", err
-		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := r.markProcessed(ctx, q, cmd.CommandID); err != nil {
 			return "", err
 		}
 		return ReserveStatusProcessed, nil
 	}
 
-	_, err = tx.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		update inventory_stock
 		set available_qty = available_qty - $1, updated_at = $2
 		where sku = $3
@@ -108,56 +91,30 @@ func (r *InventoryRepository) Reserve(ctx context.Context, cmd domain.Command) (
 		return "", err
 	}
 
-	if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
-		return "", err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
+	if err := r.markProcessed(ctx, q, cmd.CommandID); err != nil {
 		return "", err
 	}
 	return ReserveStatusReserved, nil
 }
 
-func (r *InventoryRepository) markProcessedTx(ctx context.Context, tx pgx.Tx, commandID string) error {
-	_, err := tx.Exec(ctx, `
-		insert into processed_commands (command_id, processed_at)
-		values ($1, $2)
-	`, commandID, time.Now().UTC())
-	return err
-}
-
-func (r *InventoryRepository) Release(ctx context.Context, cmd domain.Command) (string, error) {
-	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+// Release освобождает ранее зарезервированный товар (компенсация) в рамках q.
+func (r *InventoryRepository) Release(ctx context.Context, q postgres.DBTX, cmd domain.Command) (string, error) {
+	alreadyProcessed, err := r.isProcessed(ctx, q, cmd.CommandID)
 	if err != nil {
 		return "", err
 	}
-	defer tx.Rollback(ctx)
-
-	var alreadyProcessed bool
-	if err := tx.QueryRow(ctx,
-		"select exists(select 1 from processed_commands where command_id = $1)",
-		cmd.CommandID,
-	).Scan(&alreadyProcessed); err != nil {
-		return "", err
-	}
 	if alreadyProcessed {
-		if err := tx.Commit(ctx); err != nil {
-			return "", err
-		}
 		return ReleaseStatusProcessed, nil
 	}
 
 	var status string
-	err = tx.QueryRow(ctx,
+	err = q.QueryRow(ctx,
 		"select status from inventory_reservation where saga_id = $1 and sku = $2 for update",
 		cmd.SagaID, cmd.SKU,
 	).Scan(&status)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
-				return "", err
-			}
-			if err := tx.Commit(ctx); err != nil {
+			if err := r.markProcessed(ctx, q, cmd.CommandID); err != nil {
 				return "", err
 			}
 			return ReleaseStatusRejected, nil
@@ -166,17 +123,14 @@ func (r *InventoryRepository) Release(ctx context.Context, cmd domain.Command) (
 	}
 
 	if status != "reserved" {
-		if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
-			return "", err
-		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := r.markProcessed(ctx, q, cmd.CommandID); err != nil {
 			return "", err
 		}
 		return ReleaseStatusProcessed, nil
 	}
 
 	now := time.Now().UTC()
-	tag, err := tx.Exec(ctx, `
+	tag, err := q.Exec(ctx, `
 		update inventory_reservation
 		set status = 'released', updated_at = $1
 		where saga_id = $2 and sku = $3 and status = 'reserved'
@@ -185,16 +139,13 @@ func (r *InventoryRepository) Release(ctx context.Context, cmd domain.Command) (
 		return "", err
 	}
 	if tag.RowsAffected() == 0 {
-		if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
-			return "", err
-		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := r.markProcessed(ctx, q, cmd.CommandID); err != nil {
 			return "", err
 		}
 		return ReleaseStatusProcessed, nil
 	}
 
-	_, err = tx.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		update inventory_stock
 		set available_qty = least(total_qty, available_qty + $1), updated_at = $2
 		where sku = $3
@@ -203,38 +154,24 @@ func (r *InventoryRepository) Release(ctx context.Context, cmd domain.Command) (
 		return "", err
 	}
 
-	if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := r.markProcessed(ctx, q, cmd.CommandID); err != nil {
 		return "", err
 	}
 	return ReleaseStatusReleased, nil
 }
 
-func (r *InventoryRepository) SetStock(ctx context.Context, cmd domain.Command) (string, error) {
-	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+// SetStock задаёт остаток по SKU (служебная команда) в рамках q.
+func (r *InventoryRepository) SetStock(ctx context.Context, q postgres.DBTX, cmd domain.Command) (string, error) {
+	alreadyProcessed, err := r.isProcessed(ctx, q, cmd.CommandID)
 	if err != nil {
 		return "", err
 	}
-	defer tx.Rollback(ctx)
-
-	var alreadyProcessed bool
-	if err := tx.QueryRow(ctx,
-		"select exists(select 1 from processed_commands where command_id = $1)",
-		cmd.CommandID,
-	).Scan(&alreadyProcessed); err != nil {
-		return "", err
-	}
 	if alreadyProcessed {
-		if err := tx.Commit(ctx); err != nil {
-			return "", err
-		}
 		return StockStatusProcessed, nil
 	}
 
 	now := time.Now().UTC()
-	_, err = tx.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		insert into inventory_stock (sku, total_qty, available_qty, updated_at)
 		values ($1, $2, $2, $3)
 		on conflict (sku) do update
@@ -246,11 +183,25 @@ func (r *InventoryRepository) SetStock(ctx context.Context, cmd domain.Command) 
 		return "", err
 	}
 
-	if err := r.markProcessedTx(ctx, tx, cmd.CommandID); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := r.markProcessed(ctx, q, cmd.CommandID); err != nil {
 		return "", err
 	}
 	return StockStatusUpdated, nil
+}
+
+func (r *InventoryRepository) isProcessed(ctx context.Context, q postgres.DBTX, commandID string) (bool, error) {
+	var exists bool
+	err := q.QueryRow(ctx,
+		"select exists(select 1 from processed_commands where command_id = $1)",
+		commandID,
+	).Scan(&exists)
+	return exists, err
+}
+
+func (r *InventoryRepository) markProcessed(ctx context.Context, q postgres.DBTX, commandID string) error {
+	_, err := q.Exec(ctx, `
+		insert into processed_commands (command_id, processed_at)
+		values ($1, $2)
+	`, commandID, time.Now().UTC())
+	return err
 }

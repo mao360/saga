@@ -1,6 +1,23 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// OutboxMessage — строка таблицы outbox_messages. Перед публикацией в Kafka
+// сообщение сохраняется в той же транзакции, что и бизнес-изменения, что
+// устраняет dual-write и даёт at-least-once доставку.
+type OutboxMessage struct {
+	ID        uuid.UUID
+	Topic     string
+	Key       string
+	Payload   []byte
+	Headers   []byte
+	CreatedAt time.Time
+	Attempts  int
+}
 
 type Command struct {
 	CommandID string `json:"command_id"`

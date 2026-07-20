@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/mao360/saga/inventory/internal/platform/outbox"
 	"github.com/mao360/saga/inventory/internal/platform/postgres"
 	"github.com/mao360/saga/inventory/internal/repository"
 	"github.com/mao360/saga/inventory/internal/transport"
@@ -34,8 +35,24 @@ func Run() error {
 	c.Log.Info("migrations completed")
 
 	inventoryRepo := repository.NewInventoryRepository(c.Database)
-	inventoryUseCase := usecase.NewInventoryUseCase(inventoryRepo, c.KafkaProducer, c.Cfg.TopicInventoryEvents)
+	outboxRepo := repository.NewOutboxRepository(c.Database)
+	inventoryUseCase := usecase.NewInventoryUseCase(inventoryRepo, outboxRepo, c.TxMgr, c.Cfg.TopicInventoryEvents)
 	kafkaHandler := transport.NewKafkaHandler(inventoryUseCase, c.Log, c.Tel)
+
+	// Outbox relay публикует накопленные события, cleaner удаляет старые отправленные.
+	relay := outbox.New(c.Database, outboxRepo, outboxRepo, c.KafkaProducer, c.Log, outbox.Config{})
+	cleaner := outbox.NewCleaner(outboxRepo, c.Log, outbox.CleanerConfig{})
+	go func() {
+		if err := relay.Run(ctx); err != nil {
+			c.Log.Error("outbox relay exited with error", "err", err)
+			stop()
+		}
+	}()
+	go func() {
+		if err := cleaner.Run(ctx); err != nil {
+			c.Log.Error("outbox cleaner exited with error", "err", err)
+		}
+	}()
 
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", promhttp.Handler())

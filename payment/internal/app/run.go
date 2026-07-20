@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/mao360/saga/payment/internal/platform/outbox"
 	"github.com/mao360/saga/payment/internal/platform/postgres"
 	"github.com/mao360/saga/payment/internal/repository"
 	"github.com/mao360/saga/payment/internal/transport"
@@ -34,8 +35,24 @@ func Run() error {
 	c.Log.Info("migrations completed")
 
 	paymentRepo := repository.NewPaymentRepository(c.Database)
-	paymentUseCase := usecase.NewPaymentUseCase(paymentRepo, c.KafkaProducer, c.Cfg.TopicPaymentEvents)
+	outboxRepo := repository.NewOutboxRepository(c.Database)
+	paymentUseCase := usecase.NewPaymentUseCase(paymentRepo, outboxRepo, c.TxMgr, c.Cfg.TopicPaymentEvents)
 	kafkaHandler := transport.NewKafkaHandler(paymentUseCase, c.Log, c.Tel)
+
+	// Outbox relay публикует накопленные события, cleaner удаляет старые отправленные.
+	relay := outbox.New(c.Database, outboxRepo, outboxRepo, c.KafkaProducer, c.Log, outbox.Config{})
+	cleaner := outbox.NewCleaner(outboxRepo, c.Log, outbox.CleanerConfig{})
+	go func() {
+		if err := relay.Run(ctx); err != nil {
+			c.Log.Error("outbox relay exited with error", "err", err)
+			stop()
+		}
+	}()
+	go func() {
+		if err := cleaner.Run(ctx); err != nil {
+			c.Log.Error("outbox cleaner exited with error", "err", err)
+		}
+	}()
 
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", promhttp.Handler())

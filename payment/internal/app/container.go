@@ -21,6 +21,7 @@ type Container struct {
 	KafkaProducer *kafka.Producer
 	KafkaConsumer *kafka.Consumer
 	Database      *pgxpool.Pool
+	TxMgr         *postgres.TxManager
 }
 
 func NewContainer() (*Container, error) {
@@ -72,6 +73,7 @@ func NewContainer() (*Container, error) {
 		KafkaProducer: producer,
 		KafkaConsumer: consumer,
 		Database:      pool,
+		TxMgr:         postgres.NewTxManager(pool),
 	}, nil
 }
 

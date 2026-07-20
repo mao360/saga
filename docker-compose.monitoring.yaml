@@ -16,10 +16,15 @@ services:
     restart: unless-stopped
     volumes:
       - ${GRAFANA_DATA_VOLUME:-grafana_data}:/var/lib/grafana
+      - ${GRAFANA_PROVISIONING_PATH:-./monitoring/grafana/provisioning}:/etc/grafana/provisioning
+      - ${GRAFANA_DASHBOARDS_PATH:-./monitoring/grafana/dashboards}:/var/lib/grafana/dashboards
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      - GF_AUTH_ANONYMOUS_ENABLED=${GF_AUTH_ANONYMOUS_ENABLED:-true}
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=${GF_AUTH_ANONYMOUS_ORG_ROLE:-Viewer}
+      - GF_USERS_DEFAULT_THEME=${GF_USERS_DEFAULT_THEME:-dark}
     depends_on:
       - prometheus
     networks:

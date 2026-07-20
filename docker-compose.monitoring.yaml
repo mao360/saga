@@ -6,7 +6,7 @@ services:
     volumes:
       - ${PROMETHEUS_CONFIG_PATH:-./monitoring/prometheus.yml}:/etc/prometheus/prometheus.yml
     ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
+      - "${ADMIN_BIND:-0.0.0.0}:${PROMETHEUS_PORT:-9090}:9090"
     networks:
       - saga-net
 
@@ -19,7 +19,8 @@ services:
       - ${GRAFANA_PROVISIONING_PATH:-./monitoring/grafana/provisioning}:/etc/grafana/provisioning
       - ${GRAFANA_DASHBOARDS_PATH:-./monitoring/grafana/dashboards}:/var/lib/grafana/dashboards
     ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+      # Bind to localhost on a public host and reach Grafana via SSH tunnel.
+      - "${ADMIN_BIND:-0.0.0.0}:${GRAFANA_PORT:-3000}:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}
       - GF_AUTH_ANONYMOUS_ENABLED=${GF_AUTH_ANONYMOUS_ENABLED:-true}
@@ -35,7 +36,7 @@ services:
     container_name: ${CADVISOR_CONTAINER_NAME:-cadvisor}
     restart: unless-stopped
     ports:
-      - "${CADVISOR_PORT:-8088}:8080"
+      - "${ADMIN_BIND:-0.0.0.0}:${CADVISOR_PORT:-8088}:8080"
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:rw
@@ -51,7 +52,7 @@ services:
     restart: unless-stopped
     command: [ "--kafka.server=${KAFKA_EXPORTER_SERVER:-kafka:9092}" ]
     ports:
-      - "${KAFKA_EXPORTER_PORT:-9308}:9308"
+      - "${ADMIN_BIND:-0.0.0.0}:${KAFKA_EXPORTER_PORT:-9308}:9308"
     networks:
       - saga-net
 

@@ -28,10 +28,10 @@ type Config struct {
 	DatabaseConnectTimeout time.Duration `yaml:"database_connect_timeout"`
 	ShutdownTimeout        time.Duration `yaml:"shutdown_timeout"`
 
-	OutboxPollInterval      time.Duration `yaml:"outbox_poll_interval"`
-	OutboxBatchSize         int           `yaml:"outbox_batch_size"`
-	OutboxCleanerInterval   time.Duration `yaml:"outbox_cleaner_interval"`
-	OutboxRetention         time.Duration `yaml:"outbox_retention"`
+	OutboxPollInterval    time.Duration `yaml:"outbox_poll_interval"`
+	OutboxBatchSize       int           `yaml:"outbox_batch_size"`
+	OutboxCleanerInterval time.Duration `yaml:"outbox_cleaner_interval"`
+	OutboxRetention       time.Duration `yaml:"outbox_retention"`
 }
 
 func Load() (Config, error) {

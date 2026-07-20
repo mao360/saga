@@ -2,6 +2,7 @@ services:
   postgres-payment:
     image: postgres:16
     container_name: postgres-payment
+    restart: unless-stopped
     env_file:
       - .env
     environment:
@@ -9,7 +10,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-payment}
       POSTGRES_DB: ${POSTGRES_DB:-payment}
     ports:
-      - "${POSTGRES_PORT:-5435}:5432"
+      # ADMIN_BIND=127.0.0.1 on a public host keeps Postgres off the internet.
+      - "${ADMIN_BIND:-0.0.0.0}:${POSTGRES_PORT:-5435}:5432"
     volumes:
       - postgres_payment_data:/var/lib/postgresql/data
     healthcheck:
@@ -24,19 +26,22 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: ghcr.io/mao360/saga-payment:${IMAGE_TAG:-latest}
     container_name: payment
+    restart: unless-stopped
     depends_on:
       postgres-payment:
         condition: service_healthy
     env_file:
       - .env
     ports:
-      - "${HTTP_PORT:-8083}:${HTTP_PORT:-8083}"
+      # Metrics endpoint only — Prometheus scrapes it over the internal network.
+      - "${ADMIN_BIND:-0.0.0.0}:${HTTP_PORT:-8083}:${HTTP_PORT:-8083}"
     environment:
       APP_CONFIG_PATH: /app/config.yaml
       HTTP_PORT: ${HTTP_PORT:-8083}
 
-      DATABASE_DSN: ${DATABASE_DSN:-postgres://payment:payment@postgres-payment:5432/payment?sslmode=disable}
+      DATABASE_DSN: ${DATABASE_DSN:-postgres://${POSTGRES_USER:-payment}:${POSTGRES_PASSWORD:-payment}@postgres-payment:5432/${POSTGRES_DB:-payment}?sslmode=disable}
 
       KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
       KAFKA_CLIENT_ID: ${KAFKA_CLIENT_ID:-payment-service}

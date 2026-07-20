@@ -2,6 +2,7 @@ services:
   postgres-inventory:
     image: postgres:16
     container_name: postgres-inventory
+    restart: unless-stopped
     env_file:
       - .env
     environment:
@@ -9,7 +10,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inventory}
       POSTGRES_DB: ${POSTGRES_DB:-inventory}
     ports:
-      - "${POSTGRES_PORT:-5434}:5432"
+      # ADMIN_BIND=127.0.0.1 on a public host keeps Postgres off the internet.
+      - "${ADMIN_BIND:-0.0.0.0}:${POSTGRES_PORT:-5434}:5432"
     volumes:
       - postgres_inventory_data:/var/lib/postgresql/data
     healthcheck:
@@ -24,19 +26,22 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: ghcr.io/mao360/saga-inventory:${IMAGE_TAG:-latest}
     container_name: inventory
+    restart: unless-stopped
     depends_on:
       postgres-inventory:
         condition: service_healthy
     env_file:
       - .env
     ports:
-      - "${HTTP_PORT:-8082}:${HTTP_PORT:-8082}"
+      # Metrics endpoint only — Prometheus scrapes it over the internal network.
+      - "${ADMIN_BIND:-0.0.0.0}:${HTTP_PORT:-8082}:${HTTP_PORT:-8082}"
     environment:
       APP_CONFIG_PATH: /app/config.yaml
       HTTP_PORT: ${HTTP_PORT:-8082}
 
-      DATABASE_DSN: ${DATABASE_DSN:-postgres://inventory:inventory@postgres-inventory:5432/inventory?sslmode=disable}
+      DATABASE_DSN: ${DATABASE_DSN:-postgres://${POSTGRES_USER:-inventory}:${POSTGRES_PASSWORD:-inventory}@postgres-inventory:5432/${POSTGRES_DB:-inventory}?sslmode=disable}
 
       KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
       KAFKA_CLIENT_ID: ${KAFKA_CLIENT_ID:-inventory-service}

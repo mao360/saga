@@ -3,9 +3,12 @@ services:
     image: apache/kafka:3.9.0
     container_name: kafka
     hostname: kafka
+    restart: unless-stopped
     ports:
-      - "${KAFKA_INTERNAL_PORT:-9092}:${KAFKA_INTERNAL_PORT:-9092}"
-      - "${KAFKA_EXTERNAL_PORT:-29092}:${KAFKA_EXTERNAL_PORT:-29092}"
+      # Services reach Kafka via the internal network (kafka:9092); these published
+      # ports are only for host tools. ADMIN_BIND=127.0.0.1 keeps them off the internet.
+      - "${ADMIN_BIND:-0.0.0.0}:${KAFKA_INTERNAL_PORT:-9092}:${KAFKA_INTERNAL_PORT:-9092}"
+      - "${ADMIN_BIND:-0.0.0.0}:${KAFKA_EXTERNAL_PORT:-29092}:${KAFKA_EXTERNAL_PORT:-29092}"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -55,11 +58,13 @@ services:
   kafka-ui:
     image: provectuslabs/kafka-ui:v0.7.2
     container_name: kafka-ui
+    restart: unless-stopped
     depends_on:
       kafka:
         condition: service_healthy
     ports:
-      - "${KAFKA_UI_PORT:-8081}:8080"
+      # Admin UI — bind to localhost on a public host and reach it via SSH tunnel.
+      - "${ADMIN_BIND:-0.0.0.0}:${KAFKA_UI_PORT:-8081}:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local-kraft
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:${KAFKA_INTERNAL_PORT:-9092}

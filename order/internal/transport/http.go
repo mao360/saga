@@ -12,6 +12,7 @@ import (
 
 	"github.com/mao360/saga/order/internal/domain"
 	"github.com/mao360/saga/order/internal/usecase"
+	"github.com/mao360/saga/order/internal/web"
 )
 
 type OrderCreator interface {
@@ -42,6 +43,8 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/readyz", h.readyz)
 	mux.HandleFunc("/orders", h.orders)
 	mux.HandleFunc("/orders/", h.orderByID)
+	// Serve the embedded single-page UI at "/" (catch-all; API routes above win).
+	mux.Handle("/", web.Handler())
 }
 
 func (h *HTTPHandler) health(w http.ResponseWriter, _ *http.Request) {

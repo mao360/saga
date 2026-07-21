@@ -81,8 +81,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 				Namespace: "order",
 				Name:      "saga_duration_seconds",
 				Help:      "End-to-end saga duration from order creation to terminal status.",
-				// 5ms .. ~82s: под нагрузкой хвост уезжает далеко за DefBuckets.
-				Buckets: prometheus.ExponentialBuckets(0.005, 2, 15),
+				// 5ms .. ~2621s (~44 мин). Прежние 15 бакетов давали потолок 81.92с,
+				// и в прогоне 2026-07-21 p50/p95/p99 вернули ровно эту границу: все
+				// наблюдения ушли в +Inf, и гистограмма перестала что-либо различать.
+				// Сага под перегрузом живёт минутами, а в chaos-сценариях — дольше.
+				Buckets: prometheus.ExponentialBuckets(0.005, 2, 20),
 			},
 			[]string{"status"},
 		),

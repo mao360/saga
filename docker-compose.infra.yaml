@@ -30,9 +30,13 @@ services:
       # single-node dev safety
       KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
     healthcheck:
+      # kafka-topics.sh поднимает JVM на каждый вызов. Под нагрузкой старт JVM не
+      # укладывался в 5с, контейнер уходил в unhealthy при исправном брокере
+      # (прогон 2026-07-21, FailingStreak 33). Хуже того, проверка каждые 10с
+      # запускала JVM на той самой машине, потолок которой измеряется.
       test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:${KAFKA_INTERNAL_PORT:-9092} --list > /dev/null 2>&1" ]
-      interval: 10s
-      timeout: ${KAFKA_HEALTHCHECK_TIMEOUT:-5s}
+      interval: ${KAFKA_HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${KAFKA_HEALTHCHECK_TIMEOUT:-20s}
       retries: 20
     networks:
       - saga-net

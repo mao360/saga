@@ -46,6 +46,22 @@ services:
     networks:
       - saga-net
 
+  # Метрики уровня хоста. cAdvisor показывает только контейнеры, поэтому iowait
+  # и steal time не видны — а без них потолок нагрузки нечем объяснить: в прогоне
+  # 2026-07-21 контейнеры заняли 1.612 ядра из 2, то есть в CPU не упёрлись.
+  # Порт наружу не публикуется: Prometheus ходит по внутренней сети.
+  node-exporter:
+    image: ${NODE_EXPORTER_IMAGE:-prom/node-exporter:latest}
+    container_name: ${NODE_EXPORTER_CONTAINER_NAME:-node-exporter}
+    restart: unless-stopped
+    command:
+      - "--path.rootfs=/host"
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - saga-net
+
   kafka-exporter:
     image: ${KAFKA_EXPORTER_IMAGE:-danielqsj/kafka-exporter:latest}
     container_name: ${KAFKA_EXPORTER_CONTAINER_NAME:-kafka-exporter}
